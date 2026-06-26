@@ -1,0 +1,69 @@
+# Windows Local Agent Privacy And Security
+
+This note gates the PR 8404 split branches that expose local Windows context to agents, Pi chat, or desktop tools. It describes the intended review boundary; dependent feature PRs should link back here.
+
+## Current Draft Shape
+
+- The local agent API is disabled by default.
+- When enabled, the HTTP server binds only to `127.0.0.1`.
+- The default port is `47778`, with fallback attempts on higher ports when the preferred port is busy.
+- `/health` is unauthenticated and returns app/version/local endpoint metadata only.
+- `/v1/local/tools` and `/v1/local/tool` require `Authorization: Bearer <token>`.
+- The local token is 32 random bytes encoded as base64url, encrypted with Electron `safeStorage`, and stored under the app `userData` directory.
+- Users can copy or rotate the local token from Settings. Rotation restarts the local server when enabled.
+- The setup prompt copies both hosted MCP access and local API access into the clipboard so external agents can be configured manually.
+
+## Exposed Local Data
+
+The local API can expose same-PC context while Omi Windows is running:
+
+- Rewind screen-history metadata and OCR search results.
+- Raw screenshot image retrieval by `screenshot_id`.
+- Read-only SQL over the local Omi Windows SQLite database.
+- Local conversation/transcription rows.
+- Local insights, indexed files, knowledge graph status, and app/window activity.
+- Best-effort local task search when local task tables exist.
+
+Task mutation tools are deliberately unavailable in the draft. `complete_task` and `delete_task` return unavailable errors until durable local task storage and sync semantics exist.
+
+## Access Controls
+
+- Keep the server loopback-only. Any change to bind `0.0.0.0`, LAN addresses, named pipes, WebSocket exposure, or browser-accessible CORS needs a separate security review.
+- Require bearer auth on every endpoint that returns local user data. `/health` must stay metadata-only if it remains unauthenticated.
+- Keep SQL read-only with single-statement `SELECT`/`WITH` enforcement and a hard row cap. Current cap: 200 rows.
+- Keep search result caps. Current screen search cap: 50 grouped results.
+- Treat screenshot retrieval as sensitive because it returns raw local screen content. It must remain opt-in through local-agent enablement and token possession; any broader automatic screenshot access needs explicit product review.
+- Do not expose BYOK provider keys, hosted MCP keys, Firebase tokens, local agent tokens, update credentials, or runtime download tokens through local tools, SQL helpers, logs, or screenshots metadata.
+
+## Telemetry And Logs
+
+- Observability events and breadcrumbs must be sanitized before persistence.
+- Local-agent logs may include enablement state, port, status, and tool counts.
+- Local-agent logs must not include bearer tokens, hosted MCP keys, SQL query text containing user content, screenshot image data, OCR text, raw conversation text, BYOK keys, or provider responses.
+- Crash and error paths must report structural errors without dumping local database rows or response bodies.
+
+## Required Tests Before Local-Agent PR
+
+- Server binds to `127.0.0.1` and rejects unexpected bind addresses.
+- Auth-required endpoints reject missing and wrong bearer tokens.
+- Token rotation invalidates the previous bearer token after restart.
+- SQL guard rejects mutations, multi-statement SQL, and unsupported pragmas.
+- SQL row caps and screen-search caps are enforced.
+- Screenshot retrieval returns only by valid local Rewind frame ID and fails closed for missing files.
+- Settings default to disabled and stay disabled after fresh install.
+- Observability redaction covers token-like strings, provider keys, SQL errors, and local file paths where needed.
+
+## Split Gates
+
+- BYOK split: may proceed only after secret storage/redaction behavior is reviewed; local-agent APIs must not expose BYOK keys.
+- Local agent/Pi/tools split: must link this note and include tests for localhost, token lifecycle, SQL guarding, screenshot boundaries, and telemetry redaction.
+- Local STT/TTS split: should keep local runtime status separate from local-agent tool discovery unless explicit agent access is reviewed.
+- Updater/package split: must not enable local-agent access or token copying as part of install/update side effects.
+
+## Reviewer Sign-Off
+
+Before opening a merge-ready PR, get explicit review from maintainers responsible for:
+
+- Windows desktop runtime behavior.
+- Security/privacy review for local data exposure.
+- Backend/API ownership if hosted MCP, BYOK, or sync behavior changes.
