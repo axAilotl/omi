@@ -1,0 +1,42 @@
+# Windows Runtime Dependency Review
+
+This note gates the PR 8404 split branches that add runtime, native, updater, or model-download behavior. It is a review checklist, not an approval record.
+
+## Scope
+
+Use this before landing the BYOK, local agent/Pi, local STT/TTS, or updater/package splits. The UI/Rewind split should not depend on these packages.
+
+## Dependency Families
+
+| Family | Versions in integration branch | License from package metadata | Why it is added | Runtime behavior to review |
+| --- | --- | --- | --- | --- |
+| Pi agent packages | `@earendil-works/pi-agent-core@0.79.9`, `@earendil-works/pi-ai@0.79.9` | MIT | Native Pi chat/task routing in the Windows main process | LLM request routing, tool-call surface, attachment handling, transitive package set, model/provider defaults |
+| Local TTS / Transformers | `kokoro-js@1.2.1`, `@huggingface/transformers@3.8.1` | Apache-2.0 | Optional local Kokoro TTS playback | Model cache location, model license/provenance, ONNX runtime loading, GPU/CPU behavior, startup impact |
+| ONNX runtime | `onnxruntime-node@1.21.0`, `onnxruntime-web@1.22.0-dev.20250409-89f8206ba4` | MIT | Transitive runtime for Transformers/Kokoro | Native binary provenance, platform package size, dev-snapshot `onnxruntime-web` version, asar/unpack behavior |
+| Windows native FFI | `koffi@3.0.2`, `@koromix/koffi-win32-x64@3.0.2` | MIT | Foreground app/user32 access for usage and Rewind attribution | Native module copy step, DLL loading path, graceful fallback when unavailable, packaged `app.asar.unpacked` layout |
+| Updater | `electron-updater@6.8.9` | MIT | Windows auto-update status/check/install flow | Update feed URL, signature/notarization expectations, staged rollout config, lazy import behavior, failure and rollback handling |
+| Managed Parakeet runtime | `parakeet.cpp` release downloads plus GGUF model URL | External runtime/model, outside npm | Optional local STT backend | Download source, checksums, model license, install directory, opt-in trigger, CUDA/CPU asset choice, cleanup/rollback |
+
+## Required Review Checks
+
+- Confirm package provenance, license, and maintainer ownership for every new dependency and its native/transitive runtime packages.
+- Record installer and unpacked app size deltas for each split branch, not just the integration branch.
+- For runtime downloads, require explicit user opt-in before network/model download and pin release URLs with checksum validation before merge.
+- Ensure every native or downloaded runtime has a clear unavailable state and falls back to hosted Omi behavior without crashing.
+- Keep `resources/app.asar.unpacked` limited to files that must be outside asar, and verify paths on real Windows.
+- Ensure BYOK/local keys and runtime tokens are never included in logs, analytics, crash reports, update metadata, or test fixtures.
+- Keep dependency changes out of the UI/Rewind PR. Land package/runtime additions only in the branch that needs them.
+
+## Split Gates
+
+- `omi-za7.4` BYOK: may proceed after key storage/redaction review and the local privacy note are accepted.
+- `omi-za7.5` local STT/TTS: blocked until Kokoro, Transformers, ONNX, Parakeet download, and model-license review are accepted.
+- `omi-za7.6` updater/package: blocked until `electron-updater`, Koffi native staging, and real Windows package launch checks are accepted.
+- `omi-za7.8` local agent/Pi/tools: blocked until Pi package provenance and the local privacy note are accepted.
+
+## Follow-Up Before Opening Dependent PRs
+
+- Add checksum verification for managed Parakeet downloads.
+- Add release/model license links for the Parakeet GGUF model and Kokoro default model in the local STT/TTS PR.
+- Capture package size deltas for each split build copied to `C:\Temp`.
+- Run the copied `win-unpacked` folder on real Windows and file any launch/runtime blocker as a new bead.
