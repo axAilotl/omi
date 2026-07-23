@@ -24,7 +24,7 @@ import { VoiceIntroStep } from '../components/onboarding/VoiceIntroStep'
 import { AskDemoStep } from '../components/onboarding/AskDemoStep'
 import { DataSourcesStep } from '../components/onboarding/DataSourcesStep'
 import { GoalStep } from '../components/onboarding/GoalStep'
-import { AutoCreatedTasksStep } from '../components/onboarding/AutoCreatedTasksStep'
+import { ChatIntroStep } from '../components/onboarding/ChatIntroStep'
 import { createGoal } from '../lib/goals'
 // Import BrainGraph DIRECTLY (not via LazyBrainGraph) for onboarding — matches
 // the f42497b version that rendered reliably. The lazy wrapper's Suspense +
@@ -111,11 +111,12 @@ export function Onboarding(): React.JSX.Element {
     next()
   }
 
-  // Finish onboarding and land on the Tasks tab. We record the destination
-  // first, then flip the gate flag — the app shell consumes the pending route on
-  // mount (navigating from here directly races the gate's redirect to /home).
-  const finishToTasks = (): void => {
-    setPendingRoute('/tasks')
+  // Finish onboarding and land on chat (the /home hub). We record the
+  // destination first, then flip the gate flag — the app shell consumes the
+  // pending route on mount (navigating from here directly races the gate's
+  // redirect to /home).
+  const finishToChat = (): void => {
+    setPendingRoute('/home')
     completeOnboarding()
   }
 
@@ -266,9 +267,9 @@ export function Onboarding(): React.JSX.Element {
         />
       )
     }
-    // Final screen: a preview of the auto-created tasks feature. Its button both
-    // completes onboarding and routes straight to the Tasks tab.
-    return <AutoCreatedTasksStep onFinish={finishToTasks} />
+    // Final screen: an intro to chatting with omi. Its button both completes
+    // onboarding and routes straight to chat (the /home hub).
+    return <ChatIntroStep onFinish={finishToChat} />
   }
 
   // Persistent two-pane shell: omi logo + the swapping step card on the left, the
@@ -279,7 +280,7 @@ export function Onboarding(): React.JSX.Element {
   // map: the name screen (0), the "I'm going to ask you for a few permissions"
   // screen (3, TrustStep), the background/privacy consent screen (4), the
   // floating-bar steps (9 shortcut, 10 voice, 11 ask demo), and the final
-  // auto-created-tasks screen (14). The Data Sources (12) and Goal (13) steps keep
+  // chat-intro screen (14). The Data Sources (12) and Goal (13) steps keep
   // the map — Data Sources reinforces "your 2nd brain is live" and Goal
   // personalizes its suggestion from the revealed app nodes. The map is only
   // hidden (display:none), never unmounted, so it persists and returns smoothly

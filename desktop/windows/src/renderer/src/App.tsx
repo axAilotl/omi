@@ -70,8 +70,8 @@ function AppShellInner(): React.JSX.Element {
   }, [isHome])
 
   // Honor a one-shot destination requested by onboarding (e.g. the final
-  // "Take me to my tasks" button). The shell mounts at /home after the
-  // onboarding gate redirects; we consume the pending route here and jump to it.
+  // "Start chatting" button). The shell mounts at /home after the onboarding
+  // gate redirects; we consume the pending route here and jump to it.
   useEffect(() => {
     const dest = consumePendingRoute()
     if (dest) navigate(dest, { replace: true })
