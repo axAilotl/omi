@@ -270,6 +270,11 @@ checks:
     triggers: ["app/scripts/verify_ios_physical_test_auth_config.sh", "app/scripts/test_verify_ios_physical_test_auth_config.sh", "app/AGENTS.md", "app/e2e/IOS_DEVICE_TESTING.md", "app/e2e/SKILL.md", ".github/checks-manifest.yaml"]
     lanes: ["local", "ci"]
     reason: "authenticated isolated iOS hardware runs must reject the hermetic API target, the wrong Firebase project, and non-iOS Firebase app registrations before a build can create false BLE evidence"
+  - id: ios-ble-gatt-operation-scheduler
+    command: ["bash", "app/ios/test/run_ble_gatt_scheduler_tests.sh"]
+    triggers: ["app/ios/Runner/Ble/**", "app/ios/Runner.xcodeproj/project.pbxproj", "app/ios/test/BleGattOperationSchedulerTests.swift", "app/ios/test/BleManagerDependencyTypecheckStubs.swift", "app/ios/test/ble_gatt_project_graph_test.rb", "app/ios/test/run_ble_gatt_scheduler_tests.sh", ".github/checks-manifest.yaml"]
+    lanes: ["local", "ci"]
+    reason: "PR #5796 shipped characteristic-keyed completions and PR #6085 shipped RSSI-as-keepalive; the tested native boundary keeps CV1 commands session-bound, serialized, and free of unconditional polling"
   - id: deferred-work-markers
     command: ["python3", ".github/scripts/deferred-work-marker-count.py", "--changed-files", "{changed_files}", "--base", "{base}", "--check-new"]
     triggers: ["all"]
