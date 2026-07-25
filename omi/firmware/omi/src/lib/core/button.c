@@ -7,6 +7,7 @@
 #include <zephyr/pm/device_runtime.h>
 #include <zephyr/sys/poweroff.h>
 
+#include "codec.h"
 #include "haptic.h"
 #include "imu.h"
 #include "led.h"
@@ -284,16 +285,59 @@ void turnoff_all()
     haptic_off();
 #endif
 
-    // Delays for stability
-    k_msleep(1000);
+    /*
+     * Force storage first so frames already in the codec/TX pipeline cannot be
+     * live-only while capture is pausing. A failed gate rolls routing back and
+     * resumes the existing mic/AAD state.
+     */
+    rc = transport_begin_shutdown();
+    if (rc < 0) {
+        LOG_ERR("Shutdown cancelled: durable routing could not start (%d)", rc);
+        is_off = false;
+        return;
+    }
 
-    // // Enter the low power mode
-    transport_off();
-    k_msleep(300);
+    rc = mic_prepare_shutdown();
+    if (rc < 0) {
+        LOG_ERR("Shutdown cancelled: microphone did not pause cleanly (%d)", rc);
+        transport_cancel_shutdown();
+        is_off = false;
+        mic_cancel_shutdown();
+        return;
+    }
 
-    // Always turn off microphone
+    rc = codec_drain(15000U);
+    if (rc < 0) {
+        LOG_ERR("Shutdown cancelled: codec pipeline did not drain (%d)", rc);
+        transport_cancel_shutdown();
+        is_off = false;
+        mic_cancel_shutdown();
+        return;
+    }
+
+    rc = transport_prepare_shutdown();
+    if (rc < 0) {
+        LOG_ERR("Shutdown cancelled: audio was not durably committed (%d)", rc);
+        transport_cancel_shutdown();
+        is_off = false;
+        mic_cancel_shutdown();
+        return;
+    }
+
+    if (is_sd_on()) {
+        rc = app_sd_off();
+        if (rc < 0) {
+            LOG_ERR("Shutdown cancelled: SD did not unmount cleanly (%d)", rc);
+            transport_cancel_shutdown();
+            is_off = false;
+            sd_request_power(true);
+            mic_cancel_shutdown();
+            return;
+        }
+    }
+
+    /* Every fallible audio/SD gate passed; the mic thread may now be destroyed. */
     mic_off();
-    k_msleep(100);
 
     // Turn off speaker if enabled
 #ifdef CONFIG_OMI_ENABLE_SPEAKER
@@ -307,10 +351,12 @@ void turnoff_all()
     k_msleep(100);
 #endif
 
-    if (is_sd_on()) {
-        app_sd_off();
+    rc = transport_off();
+    if (rc < 0) {
+        LOG_ERR("Shutdown cancelled: transport did not stop cleanly (%d)", rc);
+        is_off = false;
+        return;
     }
-    k_msleep(300);
 
     // Put the buttons device to sleep if button is enabled
 #ifdef CONFIG_OMI_ENABLE_BUTTON
