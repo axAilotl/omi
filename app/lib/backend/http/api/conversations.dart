@@ -560,7 +560,11 @@ Future<UploadFilesResult> uploadLocalFilesV2(
   UploadProgressCallback? onUploadProgress,
   String? conversationId,
   SyncUploadLane syncLane = SyncUploadLane.fresh,
+  bool replaceTranscript = false,
 }) async {
+  if (replaceTranscript && conversationId == null) {
+    throw ArgumentError('Canonical transcript replacement requires a conversation id');
+  }
   String? captureManifest;
   if (shouldRequestSyncCaptureManifest(conversationId, syncLane)) {
     captureManifest = await _createSyncCaptureManifest(files, conversationId!);
@@ -569,6 +573,9 @@ Future<UploadFilesResult> uploadLocalFilesV2(
   var url = '${Env.apiBaseUrl}v2/sync-local-files';
   if (conversationId != null) {
     url += '?conversation_id=${Uri.encodeQueryComponent(conversationId)}';
+  }
+  if (replaceTranscript) {
+    url += '${conversationId == null ? '?' : '&'}transcript_mode=replace';
   }
   var response = await makeMultipartApiCall(
     url: url,

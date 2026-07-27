@@ -13,6 +13,7 @@ typedef SyncFilesUploader = Future<UploadFilesResult> Function(
   UploadProgressCallback? onUploadProgress,
   String? conversationId,
   SyncUploadLane syncLane,
+  bool replaceTranscript,
 });
 typedef FairUseStatusLoader = Future<Map<String, dynamic>?> Function();
 
@@ -95,6 +96,7 @@ class SyncUploadGate {
     UploadProgressCallback? onUploadProgress,
     String? conversationId,
     SyncUploadLane lane = SyncUploadLane.fresh,
+    bool replaceTranscript = false,
   }) async {
     await _uploadMutex.acquire();
     try {
@@ -122,6 +124,7 @@ class SyncUploadGate {
           onUploadProgress: onUploadProgress,
           conversationId: conversationId,
           syncLane: lane,
+          replaceTranscript: replaceTranscript,
         );
         _limiter.clearForLane(lane.name);
         return result;
