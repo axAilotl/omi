@@ -8,15 +8,16 @@
 
 #include <errno.h>
 #include <nrfx_pdm.h>
-#include <string.h>
 #include <zephyr/audio/dmic.h>
 #include <zephyr/kernel.h>
 #include <zephyr/logging/log.h>
 #include <zephyr/sys/atomic.h>
 
+#include "lib/core/aad_hold_policy.h"
 #include "lib/core/config.h"
 #include "lib/core/settings.h"
 #include "lib/core/voice_activity_gate.h"
+#include "lib/core/voice_capture_policy.h"
 
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
 #include <zephyr/devicetree.h>
@@ -65,28 +66,11 @@ static atomic_t mic_stop_req = ATOMIC_INIT(0);
 static int16_t mono_buffer[MAX_FRAMES];
 
 #ifdef CONFIG_OMI_ENABLE_VAD_GATE
-BUILD_ASSERT(CONFIG_OMI_VAD_PREROLL_FRAMES *MAX_BLOCK_SIZE / CHANNELS <= AUDIO_BUFFER_SAMPLES * BYTES_PER_SAMPLE,
-             "VAD pre-roll must fit in the codec input ring");
-
 static voice_activity_gate_t voice_gate;
-static int16_t vad_preroll[CONFIG_OMI_VAD_PREROLL_FRAMES][MAX_FRAMES];
-static uint8_t vad_preroll_write;
-static uint8_t vad_preroll_count;
 
 static void reset_voice_gate(void)
 {
     voice_activity_gate_init(&voice_gate);
-    vad_preroll_write = 0U;
-    vad_preroll_count = 0U;
-}
-
-static void store_vad_preroll(const int16_t *buffer)
-{
-    memcpy(vad_preroll[vad_preroll_write], buffer, sizeof(vad_preroll[0]));
-    vad_preroll_write = (vad_preroll_write + 1U) % CONFIG_OMI_VAD_PREROLL_FRAMES;
-    if (vad_preroll_count < CONFIG_OMI_VAD_PREROLL_FRAMES) {
-        vad_preroll_count++;
-    }
 }
 #endif
 
@@ -116,10 +100,9 @@ static atomic_t aad_req_sleep = ATOMIC_INIT(0);    /* silence timer asked to sle
 static atomic_t aad_shutdown_quiesced = ATOMIC_INIT(0);
 static K_MUTEX_DEFINE(aad_transition_mutex);
 static bool shutdown_was_in_aad_sleep;
-static bool aad_conversation_active;
-static int64_t aad_last_voice_ms;
+static aad_hold_policy_t aad_hold_policy;
 
-static void aad_track_activity(bool frame_active);
+static void aad_track_activity(const voice_activity_gate_t *gate);
 static int aad_hw_start(void);
 static void aad_wake_irq(bool enable);
 #endif
@@ -160,7 +143,12 @@ static bool forward_mic_frame(int16_t *buffer)
 }
 
 #ifdef CONFIG_OMI_ENABLE_VAD_GATE
-static void process_voice_gated_buffer(int16_t *buffer, size_t frames)
+static bool forward_awake_mic_frame(void *context)
+{
+    return forward_mic_frame(context);
+}
+
+static void process_aad_observed_buffer(int16_t *buffer, size_t frames)
 {
     static const voice_activity_gate_config_t voice_gate_config = {
         .minimum_threshold = CONFIG_OMI_VAD_ABS_THRESHOLD,
@@ -173,46 +161,28 @@ static void process_voice_gated_buffer(int16_t *buffer, size_t frames)
 
     uint32_t amplitude = avg_abs_amplitude(buffer, frames);
     bool was_open = voice_gate.is_open;
-    voice_activity_gate_action_t action =
-        voice_activity_gate_process(&voice_gate, amplitude, k_uptime_get(), &voice_gate_config);
+    voice_capture_policy_result_t result = voice_capture_policy_process(
+        &voice_gate, amplitude, k_uptime_get(), &voice_gate_config, forward_awake_mic_frame, buffer);
 
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
-    aad_track_activity(voice_gate.frame_active);
+    aad_track_activity(&voice_gate);
 #endif
 
-    if (action == VOICE_ACTIVITY_GATE_BUFFER) {
-        if (was_open) {
-            LOG_INF("Voice gate closed: amplitude=%u floor=%u threshold=%u",
-                    amplitude,
-                    voice_gate.noise_floor,
-                    voice_gate.active_threshold);
-        }
-        store_vad_preroll(buffer);
-        return;
+    if (!result.forwarded) {
+        LOG_ERR("Awake PCM frame could not cross codec/storage boundary");
     }
-    if (action == VOICE_ACTIVITY_GATE_FORWARD) {
-        (void) forward_mic_frame(buffer);
-        return;
+    if (was_open && !voice_gate.is_open) {
+        LOG_INF("Voice observer closed: amplitude=%u floor=%u threshold=%u",
+                amplitude,
+                voice_gate.noise_floor,
+                voice_gate.active_threshold);
     }
-
-    store_vad_preroll(buffer);
-    uint8_t start =
-        (vad_preroll_write + CONFIG_OMI_VAD_PREROLL_FRAMES - vad_preroll_count) % CONFIG_OMI_VAD_PREROLL_FRAMES;
-    uint8_t emitted = 0U;
-    for (; emitted < vad_preroll_count; emitted++) {
-        uint8_t index = (start + emitted) % CONFIG_OMI_VAD_PREROLL_FRAMES;
-        if (!forward_mic_frame(vad_preroll[index])) {
-            break;
-        }
+    if (result.gate_action == VOICE_ACTIVITY_GATE_OPEN) {
+        LOG_INF("Voice observer opened: amplitude=%u floor=%u threshold=%u",
+                amplitude,
+                voice_gate.noise_floor,
+                voice_gate.active_threshold);
     }
-    LOG_INF("Voice gate opened: amplitude=%u floor=%u threshold=%u emitted=%u/%u pre-roll frame(s)",
-            amplitude,
-            voice_gate.noise_floor,
-            voice_gate.active_threshold,
-            emitted,
-            vad_preroll_count);
-    vad_preroll_write = 0U;
-    vad_preroll_count = 0U;
 }
 #endif
 
@@ -250,7 +220,7 @@ static void process_audio_buffer(void *buffer, uint32_t size)
     interleaved_stereo_to_mono(inter, frames, mono_buffer);
 
 #ifdef CONFIG_OMI_ENABLE_VAD_GATE
-    process_voice_gated_buffer(mono_buffer, frames);
+    process_aad_observed_buffer(mono_buffer, frames);
 #else
     (void) forward_mic_frame(mono_buffer);
 #endif
@@ -575,7 +545,7 @@ static int enter_hw_aad(void)
          */
         atomic_clear(&aad_in_sleep);
         atomic_clear(&aad_req_sleep);
-        aad_last_voice_ms = k_uptime_get();
+        aad_hold_policy_refresh_activity(&aad_hold_policy, k_uptime_get());
         mic_resume();
         LOG_ERR("AAD: refusing sleep because microphone did not pause (%d)", ret);
         return ret;
@@ -655,19 +625,14 @@ static void aad_thread_fn(void *p1, void *p2, void *p3)
 }
 
 /* Called per mic frame after the adaptive gate classifies the current input. */
-static void aad_track_activity(bool frame_active)
+static void aad_track_activity(const voice_activity_gate_t *gate)
 {
     int64_t now = k_uptime_get();
 
     if (atomic_cas(&aad_woke, 1, 0)) {
-        aad_last_voice_ms = now;
-        aad_conversation_active = false;
+        aad_hold_policy_reset_after_wake(&aad_hold_policy, now);
     }
-    if (frame_active) {
-        aad_last_voice_ms = now;
-        aad_conversation_active = true;
-    }
-    uint32_t hold_ms = aad_conversation_active ? CONFIG_OMI_AAD_CONVERSATION_HOLD_MS : CONFIG_OMI_AAD_IDLE_HOLD_MS;
+    aad_hold_policy_track_voice_gate(&aad_hold_policy, gate, now);
     /*
      * Before speech, return quickly to hardware AAD after an acoustic false
      * wake. After speech, keep only the mic/software detector available for
@@ -676,7 +641,8 @@ static void aad_track_activity(bool frame_active)
      * transition would stall the transfer.
      */
     if (!atomic_get(&aad_shutdown_quiesced) && !atomic_get(&aad_in_sleep) && !storage_transfer_active() &&
-        (now - aad_last_voice_ms) >= hold_ms) {
+        aad_hold_policy_sleep_due(
+            &aad_hold_policy, now, CONFIG_OMI_AAD_IDLE_HOLD_MS, CONFIG_OMI_AAD_CONVERSATION_HOLD_MS)) {
         atomic_set(&aad_req_sleep, 1);
         k_sem_give(&aad_sem);
     }
@@ -704,8 +670,7 @@ static int aad_hw_start(void)
     }
     (void) gpio_pin_interrupt_configure_dt(&aad_wake, GPIO_INT_DISABLE); /* armed on first sleep */
 
-    aad_last_voice_ms = k_uptime_get();
-    aad_conversation_active = false;
+    aad_hold_policy_init(&aad_hold_policy, k_uptime_get());
     k_thread_create(&aad_thread_data,
                     aad_stack,
                     K_THREAD_STACK_SIZEOF(aad_stack),

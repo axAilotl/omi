@@ -24,6 +24,7 @@ if(CONFIG_OMI_ENABLE_T5838_AAD)
     list(APPEND app_sources src/t5838_aad.c)
 endif()
 file(GLOB core_sources
+    src/lib/core/aad_hold_policy.c
     src/lib/core/audio_storage_packer.c
     src/lib/core/config.h
     src/lib/core/codec.c
@@ -35,6 +36,7 @@ file(GLOB core_sources
     src/lib/core/sd_write_recovery.c
     src/lib/core/storage_readiness.c
     src/lib/core/voice_activity_gate.c
+    src/lib/core/voice_capture_policy.c
     src/lib/core/transport.c
     src/lib/core/button.c
     src/lib/core/monitor.c

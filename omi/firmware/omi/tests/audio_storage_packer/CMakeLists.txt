@@ -5,6 +5,7 @@ enable_testing()
 
 add_executable(audio_storage_packer_tests
     test_audio_storage_packer.c
+    ../../src/lib/core/aad_hold_policy.c
     ../../src/lib/core/audio_storage_packer.c
     ../../src/lib/core/ring_transfer_integrity.c
     ../../src/lib/core/rtc_elapsed_recovery.c
@@ -14,6 +15,7 @@ add_executable(audio_storage_packer_tests
     ../../src/lib/core/sd_write_recovery.c
     ../../src/lib/core/storage_readiness.c
     ../../src/lib/core/voice_activity_gate.c
+    ../../src/lib/core/voice_capture_policy.c
 )
 target_compile_options(audio_storage_packer_tests PRIVATE -Wall -Wextra -Werror)
 

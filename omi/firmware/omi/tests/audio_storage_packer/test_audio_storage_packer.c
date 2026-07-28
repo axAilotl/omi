@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "../../src/lib/core/aad_hold_policy.h"
 #include "../../src/lib/core/audio_storage_packer.h"
 #include "../../src/lib/core/codec_input_capacity.h"
 #include "../../src/lib/core/ring_transfer_integrity.h"
@@ -13,6 +14,7 @@
 #include "../../src/lib/core/sd_write_recovery.h"
 #include "../../src/lib/core/storage_readiness.h"
 #include "../../src/lib/core/voice_activity_gate.h"
+#include "../../src/lib/core/voice_capture_policy.h"
 
 #define MAX_CAPTURED_RECORDS 4U
 
@@ -1528,6 +1530,97 @@ static void test_voice_gate_activity_extends_hangover_and_clock_regression_is_bo
     assert(voice_activity_gate_process(&gate, 0U, 1100, &config) == VOICE_ACTIVITY_GATE_BUFFER);
 }
 
+typedef struct {
+    audio_storage_packer_t packer;
+    fake_writer_t writer;
+    uint8_t encoded_frame[40];
+    size_t callback_count;
+} awake_capture_sink_t;
+
+static bool forward_awake_capture_to_packer(void *context)
+{
+    awake_capture_sink_t *sink = context;
+
+    sink->callback_count++;
+    return audio_storage_packer_push(
+               &sink->packer, sink->encoded_frame, sizeof(sink->encoded_frame), 100U, fake_write, &sink->writer) ==
+           AUDIO_STORAGE_PACKER_ACCEPTED;
+}
+
+static void test_awake_below_threshold_pcm_reaches_capture_callback_and_packer(void)
+{
+    voice_activity_gate_t gate;
+    awake_capture_sink_t sink = {0};
+
+    voice_activity_gate_init(&gate);
+    audio_storage_packer_init(&sink.packer);
+    fill_frame(sink.encoded_frame, sizeof(sink.encoded_frame), 0x5AU);
+
+    voice_capture_policy_result_t result =
+        voice_capture_policy_process(&gate, 0U, 100, &test_voice_gate_config, forward_awake_capture_to_packer, &sink);
+
+    assert(result.gate_action == VOICE_ACTIVITY_GATE_BUFFER);
+    assert(result.forwarded);
+    assert(!gate.frame_active);
+    assert(!gate.is_open);
+    assert(sink.callback_count == 1U);
+    assert(audio_storage_packer_pending_bytes(&sink.packer) == sizeof(sink.encoded_frame) + 1U);
+    assert(audio_storage_packer_flush(&sink.packer, fake_write, &sink.writer));
+    assert(sink.writer.record_count == 1U);
+    assert_packed_frame(sink.writer.records[0], 0U, sink.encoded_frame, sizeof(sink.encoded_frame));
+}
+
+static void test_aad_hold_rejected_click_uses_idle_window(void)
+{
+    const uint32_t idle_hold_ms = 5000U;
+    const uint32_t conversation_hold_ms = 120000U;
+    voice_activity_gate_t gate;
+    aad_hold_policy_t policy;
+
+    voice_activity_gate_init(&gate);
+    aad_hold_policy_init(&policy, 0);
+    assert(voice_activity_gate_process(&gate, 0U, 0, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_BUFFER);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 0);
+
+    assert(voice_activity_gate_process(&gate, 900U, 100, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_BUFFER);
+    assert(gate.frame_active);
+    assert(!gate.is_open);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 100);
+
+    assert(!policy.conversation_active);
+    assert(aad_hold_policy_current_hold_ms(&policy, idle_hold_ms, conversation_hold_ms) == idle_hold_ms);
+    assert(!aad_hold_policy_sleep_due(&policy, 5099, idle_hold_ms, conversation_hold_ms));
+    assert(aad_hold_policy_sleep_due(&policy, 5100, idle_hold_ms, conversation_hold_ms));
+}
+
+static void test_aad_hold_debounced_quiet_speech_uses_conversation_window(void)
+{
+    const uint32_t idle_hold_ms = 5000U;
+    const uint32_t conversation_hold_ms = 120000U;
+    voice_activity_gate_t gate;
+    aad_hold_policy_t policy;
+
+    voice_activity_gate_init(&gate);
+    aad_hold_policy_init(&policy, 0);
+    assert(voice_activity_gate_process(&gate, 0U, 0, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_BUFFER);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 0);
+
+    assert(voice_activity_gate_process(&gate, 250U, 100, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_BUFFER);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 100);
+    assert(!policy.conversation_active);
+    assert(voice_activity_gate_process(&gate, 250U, 200, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_BUFFER);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 200);
+    assert(!policy.conversation_active);
+    assert(voice_activity_gate_process(&gate, 250U, 300, &test_voice_gate_config) == VOICE_ACTIVITY_GATE_OPEN);
+    aad_hold_policy_track_voice_gate(&policy, &gate, 300);
+
+    assert(policy.conversation_active);
+    assert(aad_hold_policy_current_hold_ms(&policy, idle_hold_ms, conversation_hold_ms) == conversation_hold_ms);
+    assert(!aad_hold_policy_sleep_due(&policy, 5300, idle_hold_ms, conversation_hold_ms));
+    assert(!aad_hold_policy_sleep_due(&policy, 120299, idle_hold_ms, conversation_hold_ms));
+    assert(aad_hold_policy_sleep_due(&policy, 120300, idle_hold_ms, conversation_hold_ms));
+}
+
 static void test_codec_pcm_capacity_guard(void)
 {
     assert(!codec_pcm_frame_fits(3199U, 1600U));
@@ -1580,6 +1673,9 @@ int main(void)
     test_voice_gate_tracks_room_noise_without_treating_it_as_speech();
     test_voice_gate_opens_after_debounce_and_keeps_hangover();
     test_voice_gate_activity_extends_hangover_and_clock_regression_is_bounded();
+    test_awake_below_threshold_pcm_reaches_capture_callback_and_packer();
+    test_aad_hold_rejected_click_uses_idle_window();
+    test_aad_hold_debounced_quiet_speech_uses_conversation_window();
     test_codec_pcm_capacity_guard();
     puts("audio_storage_packer_tests: PASS");
     return 0;
