@@ -89,10 +89,11 @@ config OMI_ENABLE_MONITOR
     default n
 
 config OMI_ENABLE_VAD_GATE
-    bool "Enable voice activity gate"
+    bool "Enable software acoustic activity observer"
     help
-        "Only forward microphone audio to codec/transport when voice activity
-         is detected."
+        "Observe microphone amplitude for the hardware-AAD power policy.
+         Captured audio is always forwarded to codec/storage while PDM is
+         awake."
     default n
 
 config OMI_VAD_ABS_THRESHOLD
@@ -137,47 +138,34 @@ config OMI_VAD_NOISE_FALL_SHIFT
          when the wearer moves into a quieter room."
 
 config OMI_VAD_DEBOUNCE_FRAMES
-    int "VAD debounce frames to start recording"
+    int "VAD debounce frames to promote conversation hold"
     range 1 50
     default 3
     depends on OMI_ENABLE_VAD_GATE
     help
-        "Number of consecutive frames above threshold required before
-         transitioning from SLEEP to RECORDING. Each frame is ~100ms.
-         Default 3 = 300ms debounce to filter noise spikes."
+        "Number of consecutive frames above threshold required before the
+         hardware-AAD policy selects its conversation hold. Each frame is
+         ~100ms. Default 3 = 300ms debounce to filter noise spikes."
 
 config OMI_VAD_HOLD_MS
-    int "VAD hold time after last voice (ms)"
+    int "VAD observer hold time after last activity (ms)"
     range 500 30000
     default 3000
     depends on OMI_ENABLE_VAD_GATE
     help
-        "Time in milliseconds to keep recording after the last frame with
-         voice activity. Prevents cutting off speech pauses and sentence
-         endings. Default 3000 = 3 seconds."
-
-config OMI_VAD_PREROLL_FRAMES
-    int "VAD pre-roll microphone frames"
-    range 1 10
-    default 8
-    depends on OMI_ENABLE_VAD_GATE
-    help
-        "Number of 100 ms PCM frames retained while the gate is closed and
-         emitted in order when debounced voice opens it. Default 8 preserves
-         roughly 800 ms before detection without exceeding the codec's
-         one-second input ring."
+        "Time in milliseconds to keep the software activity state open after
+         the last active frame. Capture continues regardless of this state."
 
 config OMI_ENABLE_T5838_AAD
     bool "Enable T5838 hardware AAD (ultra-low-power mic sleep)"
     depends on OMI_ENABLE_VAD_GATE
     default n
     help
-        "When the software VAD gate enters SLEEP, pause the PDM clock so
-         the T5838 MEMS microphone enters its built-in Acoustic Activity
-         Detection mode (~15 µA). The mic hardware monitors sound and
-         asserts the WAKE pin when it detects acoustic activity, at which
-         point the driver resumes PDM and the software VAD takes over.
-         Requires THSEL (P1.5) and WAKE (P1.2) to be wired to the T5838."
+        "After the software observer's idle or conversation hold expires,
+         pause the PDM clock so the T5838 MEMS microphone enters its built-in
+         Acoustic Activity Detection mode (~15 µA). The mic hardware monitors
+         sound and asserts WAKE to resume PDM. Requires THSEL (P1.5) and WAKE
+         (P1.2) to be wired to the T5838."
 
 config OMI_AAD_SETTLE_MS
     int "T5838 AAD settle time before arming WAKE (ms)"
