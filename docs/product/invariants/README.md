@@ -25,6 +25,7 @@ rules stay in [`AGENTS.md`](../../../AGENTS.md). Product north star:
 | INV-UI-1 | No purple; neutral accents | locked | [brand-ui.md](./brand-ui.md) |
 | INV-AUTH-1 | Desktop Firebase session truth | locked | [auth-session.md](./auth-session.md) |
 | INV-DATA-1 | Production-family customer data-plane continuity | locked | [data-plane-continuity.md](./data-plane-continuity.md) |
+| INV-CAPTURE-1 | One durable conversation timeline | proposed | [capture-continuity.md](./capture-continuity.md) |
 | INV-VOICE-1 | One desktop voice-turn lifecycle owner | locked | [desktop-voice-turns.md](./desktop-voice-turns.md) |
 
 ## File template
