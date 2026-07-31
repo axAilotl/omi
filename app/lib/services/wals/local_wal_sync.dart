@@ -4,7 +4,6 @@ import 'dart:math';
 import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
-import 'package:opus_dart/opus_dart.dart';
 
 import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/http/api/conversations.dart';
@@ -669,7 +668,7 @@ class LocalWalSyncImpl implements LocalWalSync {
   })  : _uploadGateOverride = uploadGate,
         _walPersisterOverride = walPersister,
         _walPathResolver = walPathResolver ?? Wal.getFilePath,
-        _silenceFrameFactory = silenceFrameFactory ?? _encodeOpusSilenceFrame,
+        _silenceFrameFactory = silenceFrameFactory ?? encodeOpusSilenceFrame,
         _syncJobStatusFetcher = syncJobStatusFetcher ?? fetchSyncJobStatus,
         _conversationBoundarySecondsProvider =
             conversationBoundarySecondsProvider ?? (() => SharedPreferencesUtil().conversationSilenceDuration);
@@ -696,21 +695,6 @@ class LocalWalSyncImpl implements LocalWalSync {
       final idle = _externalWalRegistrationsIdle;
       if (idle == null) continue;
       await idle.future;
-    }
-  }
-
-  static List<int> _encodeOpusSilenceFrame(BleAudioCodec codec) {
-    final encoder = SimpleOpusEncoder(
-      sampleRate: 16000,
-      channels: 1,
-      application: Application.voip,
-    );
-    try {
-      return encoder.encode(
-        input: Int16List(codec.getFrameSize()),
-      );
-    } finally {
-      encoder.destroy();
     }
   }
 
