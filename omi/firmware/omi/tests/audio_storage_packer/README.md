@@ -19,6 +19,7 @@ recovery, control-response retention, and RTC trust after reboot.
 | Loss accounting | Wire `dropped_packets` counts only previously durable records made unreachable; a never-committed RAM tail remains diagnostics-only. |
 | RTC reboot validity | Repeated boots leave a persisted epoch invalid and records timestamp zero. Live phone sync establishes valid, increasing time; rejected updates are transactional and uptime/epoch arithmetic clamps or rejects its boundaries. |
 | RTC marker safety | The production elapsed-recovery seam consumes a one-shot marker before apply, rejects ordinary-reset provenance, fails closed for every IMU prerequisite, and rejects unbounded, wrap-ambiguous, or overflowing elapsed estimates. |
+| Debug black-box trace | Trace TTL expiry, ring overwrite accounting, stale-cursor reporting, and paged export preserve ordered event identity. |
 
 ## Run on the host
 

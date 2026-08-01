@@ -21,6 +21,16 @@ static uint64_t rtc_epoch = 0;
 static app_sd_ring_quarantine_t sd_ring_quarantine = {0};
 static int sd_ring_quarantine_load_error;
 
+struct blackbox_boot_record {
+    uint32_t version;
+    uint32_t boot_count;
+    uint32_t reset_reason;
+    uint32_t record_crc32;
+};
+
+#define BLACKBOX_BOOT_RECORD_VERSION 1U
+static struct blackbox_boot_record blackbox_boot_record;
+
 #define SD_RING_QUARANTINE_VERSION 2U
 struct sd_ring_quarantine_record {
     uint32_t version;
@@ -186,6 +196,26 @@ static int settings_set(const char *name, size_t len, settings_read_cb read_cb, 
                 record.affected_start_seq,
                 record.replacement_start_seq,
                 record.batch_packets);
+        return 0;
+    }
+
+    if (settings_name_steq(name, "blackbox_boot", &next) && !next) {
+        struct blackbox_boot_record record;
+        if (len != sizeof(record)) {
+            return -EINVAL;
+        }
+        rc = read_cb(cb_arg, &record, sizeof(record));
+        if (rc < 0) {
+            return rc;
+        }
+        uint32_t stored_crc = record.record_crc32;
+        record.record_crc32 = 0U;
+        uint32_t computed_crc = ring_transfer_crc32_update(0U, (const uint8_t *) &record, sizeof(record));
+        if (record.version != BLACKBOX_BOOT_RECORD_VERSION || stored_crc != computed_crc) {
+            return -EINVAL;
+        }
+        blackbox_boot_record = record;
+        blackbox_boot_record.record_crc32 = stored_crc;
         return 0;
     }
 
@@ -385,4 +415,23 @@ int app_settings_save_mic_gain(uint8_t new_gain)
 uint8_t app_settings_get_mic_gain(void)
 {
     return mic_gain;
+}
+
+uint32_t app_settings_record_blackbox_boot(uint32_t reset_reason)
+{
+    struct blackbox_boot_record record = {
+        .version = BLACKBOX_BOOT_RECORD_VERSION,
+        .boot_count = blackbox_boot_record.boot_count + 1U,
+        .reset_reason = reset_reason,
+        .record_crc32 = 0U,
+    };
+    if (record.boot_count == 0U) {
+        record.boot_count = 1U;
+    }
+    record.record_crc32 = ring_transfer_crc32_update(0U, (const uint8_t *) &record, sizeof(record));
+    int err = settings_save_one("omi/blackbox_boot", &record, sizeof(record));
+    if (err == 0) {
+        blackbox_boot_record = record;
+    }
+    return record.boot_count;
 }

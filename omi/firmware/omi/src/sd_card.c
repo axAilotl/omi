@@ -14,6 +14,9 @@
 #include <zephyr/sys/util.h>
 
 #include "lib/core/ring_transfer_integrity.h"
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+#include "lib/core/blackbox.h"
+#endif
 #include "lib/core/sd_ring_durability.h"
 #include "lib/core/sd_ring_recovery.h"
 #include "lib/core/sd_write_recovery.h"
@@ -269,6 +272,10 @@ static void enter_sd_write_terminal(int error)
     }
 
     atomic_set(&storage_health, SD_STORAGE_TERMINAL);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_SD_HEALTH_TERMINAL, 1U);
+    blackbox_record(BLACKBOX_EVENT_SD_HEALTH, SD_STORAGE_TERMINAL, error);
+#endif
     sd_write_blocked = true;
     write_recovery_action = SD_WRITE_RECOVERY_ACTION_TERMINAL;
     sd_ring_durability_enter_terminal(&ring_durability);
@@ -293,6 +300,10 @@ static void note_sd_write_failure(int error)
     }
 
     atomic_set(&storage_health, SD_STORAGE_DEGRADED);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_SD_HEALTH_DEGRADED, 1U);
+    blackbox_record(BLACKBOX_EVENT_SD_HEALTH, SD_STORAGE_DEGRADED, error);
+#endif
     sd_write_blocked = false;
     LOG_WRN("SD write degraded: failures_on_mount=%u remounts=%u next=%s error=%d",
             write_recovery_policy.failures_on_mount,
@@ -2221,6 +2232,9 @@ uint32_t write_to_file_at_timestamp(const uint8_t *data, uint32_t length, uint32
 
     if (ret != 0) {
         write_rejected_records++;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SD_WRITE_REJECTED, 1U);
+#endif
         int64_t now = k_uptime_get();
         if (now - last_write_err_log_ms > 2000) {
             LOG_WRN("Write queue full, record rejected for ordered retry (%d), rejected attempts=%u",
@@ -2230,6 +2244,10 @@ uint32_t write_to_file_at_timestamp(const uint8_t *data, uint32_t length, uint32
         }
         return 0;
     }
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_SD_WRITE_QUEUED, 1U);
+#endif
 
     return length;
 }

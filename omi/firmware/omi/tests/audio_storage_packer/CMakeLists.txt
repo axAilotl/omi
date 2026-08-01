@@ -20,3 +20,10 @@ add_executable(audio_storage_packer_tests
 target_compile_options(audio_storage_packer_tests PRIVATE -Wall -Wextra -Werror)
 
 add_test(NAME audio_storage_packer_tests COMMAND audio_storage_packer_tests)
+
+add_executable(blackbox_trace_tests
+    test_blackbox_trace.c
+    ../../src/lib/core/blackbox_trace.c
+)
+target_compile_options(blackbox_trace_tests PRIVATE -Wall -Wextra -Werror)
+add_test(NAME blackbox_trace_tests COMMAND blackbox_trace_tests)

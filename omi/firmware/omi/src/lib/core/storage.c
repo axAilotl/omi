@@ -13,6 +13,9 @@
 #include <zephyr/sys/byteorder.h>
 
 #include "ring_transfer_integrity.h"
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+#include "blackbox.h"
+#endif
 #include "rtc.h"
 #include "sd_card.h"
 #include "storage_readiness.h"
@@ -400,10 +403,18 @@ static int send_ring_info_response(struct bt_conn *conn)
     sd_ring_info_t info;
     int ret = sd_ring_get_info(&info);
     if (ret < 0) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
+        blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ERROR, CMD_RING_INFO, ret, 1000U);
+#endif
         return send_ack(conn, storage_status_from_error(ret, STORAGE_NOT_READY));
     }
 
     storage_status_cache_set(&info);
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_record(BLACKBOX_EVENT_SYNC_INFO, (int32_t) info.read_seq, (int32_t) (info.write_seq - info.read_seq));
+#endif
 
     uint8_t response[31];
     response[0] = NOTIFY_INFO;
@@ -544,6 +555,10 @@ static void write_to_gatt(struct bt_conn *conn)
         int ret = sd_ring_read(
             current_read_seq, storage_buffer, packets_to_read * RAW_AUDIO_PACKET_BYTES, &bytes_read, &packets_read);
         if (ret < 0) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
+            blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ERROR, CMD_RING_READ, ret, 1000U);
+#endif
             transfer_end_status = storage_status_from_error(ret, STORAGE_NOT_READY);
             done_pending = true;
             remaining_packets = 0;
@@ -578,6 +593,10 @@ static void write_to_gatt(struct bt_conn *conn)
                 return;
             }
             if (err) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
+                blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ERROR, NOTIFY_DATA, err, 1000U);
+#endif
                 transfer_end_status = storage_status_from_error(err, STORAGE_NOT_READY);
                 done_pending = true;
                 remaining_packets = 0;
@@ -586,6 +605,9 @@ static void write_to_gatt(struct bt_conn *conn)
 
             transfer_data_crc = ring_transfer_crc32_update(transfer_data_crc, storage_buffer + bytes_sent, payload);
             bytes_sent += payload;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_counter_add(BLACKBOX_COUNTER_SYNC_BYTES, payload);
+#endif
             sync_speed_add_bytes(payload);
         }
 
@@ -622,6 +644,9 @@ static uint8_t parse_storage_command(void *buf, uint16_t len)
     const uint8_t command = bytes[0];
 
     if (command == CMD_RING_INFO) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_INFO, 1U);
+#endif
         info_requested = 1;
         return STORAGE_DEFERRED;
     }
@@ -633,6 +658,11 @@ static uint8_t parse_storage_command(void *buf, uint16_t len)
 
         pending_start_seq = sys_get_be64(bytes + 1);
         pending_packet_count = (len == 13U) ? sys_get_be32(bytes + 9) : 0U;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_READ, 1U);
+        blackbox_record_rate_limited(
+            BLACKBOX_EVENT_SYNC_READ, (int32_t) pending_start_seq, (int32_t) pending_packet_count, 5000U);
+#endif
         read_request_pending = 1;
         return STORAGE_DEFERRED;
     }
@@ -643,6 +673,10 @@ static uint8_t parse_storage_command(void *buf, uint16_t len)
         }
 
         pending_advance_seq = sys_get_be64(bytes + 1);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ADVANCE, 1U);
+        blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ADVANCE, (int32_t) pending_advance_seq, 0, 5000U);
+#endif
         advance_request_pending = 1;
         return STORAGE_DEFERRED;
     }
@@ -653,6 +687,10 @@ static uint8_t parse_storage_command(void *buf, uint16_t len)
     }
 
     if (command == CMD_STOP_SYNC) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_STOP, 1U);
+        blackbox_record(BLACKBOX_EVENT_SYNC_STOP, (int32_t) current_read_seq, (int32_t) remaining_packets);
+#endif
         stop_requested = 1;
         return 0;
     }
@@ -808,6 +846,16 @@ static void storage_write(void)
                 if (ring_control_response_should_retain(true, err)) {
                     k_msleep(STORAGE_IDLE_POLL_MS_CONNECTED);
                 } else {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                    if (err == 0) {
+                        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_DONE, 1U);
+                        blackbox_record_rate_limited(
+                            BLACKBOX_EVENT_SYNC_DONE, transfer_end_status, (int32_t) current_read_seq, 5000U);
+                    } else {
+                        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
+                        blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ERROR, NOTIFY_DONE, err, 1000U);
+                    }
+#endif
                     reset_transfer_state();
                 }
             } else {

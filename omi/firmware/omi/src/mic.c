@@ -14,6 +14,9 @@
 #include <zephyr/sys/atomic.h>
 
 #include "lib/core/aad_hold_policy.h"
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+#include "lib/core/blackbox.h"
+#endif
 #include "lib/core/config.h"
 #include "lib/core/settings.h"
 #include "lib/core/voice_activity_gate.h"
@@ -172,12 +175,20 @@ static void process_aad_observed_buffer(int16_t *buffer, size_t frames)
         LOG_ERR("Awake PCM frame could not cross codec/storage boundary");
     }
     if (was_open && !voice_gate.is_open) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_VOICE_GATE_CLOSE, 1U);
+        blackbox_record_rate_limited(BLACKBOX_EVENT_VOICE_GATE_CLOSE, amplitude, voice_gate.active_threshold, 60000U);
+#endif
         LOG_INF("Voice observer closed: amplitude=%u floor=%u threshold=%u",
                 amplitude,
                 voice_gate.noise_floor,
                 voice_gate.active_threshold);
     }
     if (result.gate_action == VOICE_ACTIVITY_GATE_OPEN) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_VOICE_GATE_OPEN, 1U);
+        blackbox_record_rate_limited(BLACKBOX_EVENT_VOICE_GATE_OPEN, amplitude, voice_gate.active_threshold, 60000U);
+#endif
         LOG_INF("Voice observer opened: amplitude=%u floor=%u threshold=%u",
                 amplitude,
                 voice_gate.noise_floor,
@@ -263,6 +274,10 @@ static void mic_thread_function(void *p1, void *p2, void *p3)
         }
 
         if (ret < 0) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_counter_add(BLACKBOX_COUNTER_MIC_READ_ERROR, 1U);
+            blackbox_record_rate_limited(BLACKBOX_EVENT_MIC_READ_ERROR, ret, mic_running ? 1 : 0, 1000U);
+#endif
             LOG_ERR("Read failed: %d", ret);
             continue;
         }
@@ -565,6 +580,10 @@ static int enter_hw_aad(void)
     }
 
     atomic_set(&aad_in_sleep, 1);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_AAD_SLEEP, 1U);
+    blackbox_record_rate_limited(BLACKBOX_EVENT_AAD_SLEEP, is_connected ? 1 : 0, sd_storage_health(), 60000U);
+#endif
 
     atomic_clear(&aad_wake_pending);
     aad_wake_irq(true); /* arm: only real acoustic activity wakes now */
@@ -586,8 +605,12 @@ static void exit_hw_aad(void)
     t5838_aad_release_clk(); /* hand CLK back to the PDM peripheral */
     atomic_set(&aad_in_sleep, 0);
     atomic_set(&aad_woke, 1); /* reset silence timer in mic ctx */
-    sd_request_power(true);   /* power on + remount SD before audio starts flowing */
-    mic_resume();             /* dmic START reclaims CLK via pinctrl */
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_AAD_WAKE, 1U);
+    blackbox_record_rate_limited(BLACKBOX_EVENT_AAD_WAKE, is_connected ? 1 : 0, sd_storage_health(), 60000U);
+#endif
+    sd_request_power(true); /* power on + remount SD before audio starts flowing */
+    mic_resume();           /* dmic START reclaims CLK via pinctrl */
     LOG_INF("AAD: WAKE -> mic resumed");
 }
 

@@ -4,6 +4,9 @@
 #include <zephyr/shell/shell.h>
 
 #include "lib/core/button.h"
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+#include "lib/core/blackbox.h"
+#endif
 #include "lib/core/codec.h"
 #include "lib/core/config.h"
 #include "lib/core/feedback.h"
@@ -65,6 +68,9 @@ static uint32_t take_and_print_reset_reason(void)
 
 static void codec_handler(uint8_t *data, size_t len)
 {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_AUDIO_FRAME, 1U);
+#endif
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     monitor_inc_broadcast_audio();
 #endif
@@ -78,6 +84,9 @@ static void codec_handler(uint8_t *data, size_t len)
 
 static int mic_handler(int16_t *buffer)
 {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_MIC_BUFFER, 1U);
+#endif
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     // Track total bytes processed (each sample is 2 bytes)
     monitor_inc_mic_buffer();
@@ -236,6 +245,11 @@ int main(void)
         LOG_ERR("Failed to initialize settings (err %d)", setting_ret);
     }
 
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    uint32_t blackbox_boot_count = setting_ret ? 1U : app_settings_record_blackbox_boot(reset_reason);
+    (void) blackbox_init(reset_reason, blackbox_boot_count);
+#endif
+
     // Initialize RTC from saved epoch
     init_rtc();
     if (!rtc_is_valid()) {
@@ -353,6 +367,9 @@ int main(void)
 
     while (1) {
         watchdog_feed();
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_set_sd_state(is_sd_on(), sd_is_ready(), (uint8_t) sd_storage_health());
+#endif
 #ifdef CONFIG_OMI_ENABLE_MONITOR
         monitor_log_metrics();
 #endif

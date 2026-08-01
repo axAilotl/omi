@@ -45,6 +45,12 @@ int app_settings_save_mic_gain(uint8_t new_gain);
 uint8_t app_settings_get_mic_gain(void);
 
 /**
+ * Increment and persist the debug-firmware boot capsule once per boot.
+ * Returns the resulting monotonic boot count (at least 1).
+ */
+uint32_t app_settings_record_blackbox_boot(uint32_t reset_reason);
+
+/**
  * @brief Save the RTC timestamp setting.
  *
  * @param ts The new RTC timestamp.

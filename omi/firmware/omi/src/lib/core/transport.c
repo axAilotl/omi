@@ -22,6 +22,9 @@
 
 #include "accel.h"
 #include "audio_storage_packer.h"
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+#include "blackbox.h"
+#endif
 #include "button.h"
 #include "config.h"
 #include "features.h"
@@ -538,6 +541,10 @@ static void exchange_func(struct bt_conn *conn, uint8_t att_err, struct bt_gatt_
     ARG_UNUSED(params);
     if (att_err) {
         LOG_ERR("MTU exchange failed (err %u)", att_err);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_LINK_SETUP_ERROR, 1U);
+        blackbox_record(BLACKBOX_EVENT_LINK_SETUP_ERROR, LINK_SETUP_MTU, att_err);
+#endif
     } else {
         uint16_t mtu = bt_gatt_get_mtu(conn);
         if (!set_mtu_for_current_connection(conn, mtu)) {
@@ -545,8 +552,37 @@ static void exchange_func(struct bt_conn *conn, uint8_t att_err, struct bt_gatt_
             return;
         }
         LOG_INF("MTU exchange successful. New MTU: %u (Payload: %u)", mtu, mtu - 3);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_set_mtu(mtu);
+        blackbox_record(BLACKBOX_EVENT_MTU, mtu, 0);
+#endif
     }
 }
+
+/*
+ * Android and iOS commonly initiate ATT MTU negotiation before our serialized
+ * link-setup worker reaches LINK_SETUP_MTU. In that case our later exchange
+ * returns -EALREADY, so the exchange callback is never the authoritative
+ * observation point. Track the stack callback instead; it fires regardless of
+ * which side initiated the exchange.
+ */
+static void _att_mtu_updated(struct bt_conn *conn, uint16_t tx, uint16_t rx)
+{
+    uint16_t mtu = bt_gatt_get_mtu(conn);
+    if (!set_mtu_for_current_connection(conn, mtu)) {
+        LOG_DBG("Ignoring ATT MTU update from stale connection");
+        return;
+    }
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_set_mtu(mtu);
+    blackbox_record(BLACKBOX_EVENT_MTU, tx, rx);
+#endif
+}
+
+static struct bt_gatt_cb _gatt_callback_references = {
+    .att_mtu_updated = _att_mtu_updated,
+};
 
 //
 // Battery Service Handlers
@@ -599,6 +635,10 @@ void broadcast_battery_level(struct k_work *work_item)
     if (battery_get_millivolt(&battery_millivolt) == 0 &&
         battery_get_percentage(&battery_percentage, battery_millivolt) == 0) {
 
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_set_battery(battery_millivolt, battery_percentage, is_charging);
+#endif
+
         LOG_PRINTK("Battery at %d mV (capacity %d%%)\n", battery_millivolt, battery_percentage);
 
         if (is_connected && conn) {
@@ -640,6 +680,10 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
 
     if (err != 0U) {
         LOG_ERR("Bluetooth connection failed (err %u)", err);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_BLE_CONNECT_ERROR, 1U);
+        blackbox_record(BLACKBOX_EVENT_BLE_CONNECT_ERROR, err, 0);
+#endif
         return;
     }
 
@@ -683,6 +727,13 @@ static void _transport_connected(struct bt_conn *conn, uint8_t err)
             info.le.latency,
             supervision_timeout);
     LOG_INF("Initial MTU: %u", mtu);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_BLE_CONNECT, 1U);
+    blackbox_set_link_params(info.le.interval, info.le.latency, info.le.timeout);
+    blackbox_set_mtu(mtu);
+    blackbox_record(
+        BLACKBOX_EVENT_BLE_CONNECTED, info.le.interval, ((int32_t) info.le.latency << 16) | info.le.timeout);
+#endif
     is_connected = true;
     k_work_cancel_delayable(&bulk_link_restore_work);
     k_spinlock_key_t bulk_policy_key = k_spin_lock(&bulk_link_policy_lock);
@@ -717,6 +768,10 @@ K_SEM_DEFINE(audio_tx_sem,
 
 static void _transport_disconnected(struct bt_conn *conn, uint8_t err)
 {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_BLE_DISCONNECT, 1U);
+    blackbox_record(BLACKBOX_EVENT_BLE_DISCONNECTED, err, current_mtu);
+#endif
     atomic_inc(&link_setup_generation);
     k_work_cancel_delayable(&link_setup_work);
     k_work_cancel_delayable(&bulk_link_restore_work);
@@ -781,6 +836,10 @@ static void _le_param_updated(struct bt_conn *conn, uint16_t interval, uint16_t 
             connection_interval,
             latency,
             supervision_timeout);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_set_link_params(interval, latency, timeout);
+    blackbox_record_rate_limited(BLACKBOX_EVENT_LINK_PARAMS, interval, ((int32_t) latency << 16) | timeout, 10000U);
+#endif
 }
 
 static void _le_phy_updated(struct bt_conn *conn, struct bt_conn_le_phy_info *param)
@@ -798,6 +857,10 @@ static void _le_phy_updated(struct bt_conn *conn, struct bt_conn_le_phy_info *pa
     } else {
         LOG_INF("PHY updated. New PHY: Unknown (%u)", param->tx_phy);
     }
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_set_phy(param->tx_phy, param->rx_phy);
+    blackbox_record(BLACKBOX_EVENT_PHY, param->tx_phy, param->rx_phy);
+#endif
 }
 
 static void _le_data_length_updated(struct bt_conn *conn, struct bt_conn_le_data_len_info *info)
@@ -808,6 +871,10 @@ static void _le_data_length_updated(struct bt_conn *conn, struct bt_conn_le_data
             info->rx_max_len,
             info->rx_max_time);
     // current_mtu is updated in exchange_func after MTU negotiation.
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_set_data_length(info->tx_max_len, info->rx_max_len);
+    blackbox_record(BLACKBOX_EVENT_DATA_LENGTH, info->tx_max_len, info->rx_max_len);
+#endif
 }
 
 static struct bt_conn_cb _callback_references = {
@@ -980,6 +1047,9 @@ static void link_setup_work_handler(struct k_work *work)
     }
 
     int err;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_LINK_SETUP_ATTEMPT, 1U);
+#endif
     switch (link_setup_stage) {
     case LINK_SETUP_CONN_PARAMS:
         err = update_conn_params(conn);
@@ -999,6 +1069,13 @@ static void link_setup_work_handler(struct k_work *work)
         break;
     }
     bt_conn_unref(conn);
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    if (err != 0 && err != -EALREADY) {
+        blackbox_counter_add(BLACKBOX_COUNTER_LINK_SETUP_ERROR, 1U);
+        blackbox_record(BLACKBOX_EVENT_LINK_SETUP_ERROR, link_setup_stage, err);
+    }
+#endif
 
     if (generation != atomic_get(&link_setup_generation)) {
         return;
@@ -1108,6 +1185,11 @@ static bool write_to_tx_queue(uint8_t *data, size_t size)
                      (CODEC_OUTPUT_MAX_BYTES + RING_BUFFER_HEADER_SIZE)); // It always fits completely or not at all
     if (written != CODEC_OUTPUT_MAX_BYTES + RING_BUFFER_HEADER_SIZE) {
         tx_queue_full_frames++;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_AUDIO_QUEUE_FULL, 1U);
+        blackbox_record_rate_limited(
+            BLACKBOX_EVENT_AUDIO_QUEUE_FULL, tx_queue_full_frames, ring_buf_space_get(&ring_buf), 1000U);
+#endif
         int64_t now = k_uptime_get();
         if (now >= tx_queue_drop_log_deadline_ms) {
             LOG_WRN(
@@ -1149,6 +1231,9 @@ static void on_audio_tx_done(struct bt_conn *conn, void *user_data)
 {
     ARG_UNUSED(conn);
     ARG_UNUSED(user_data);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_AUDIO_NOTIFY_COMPLETED, 1U);
+#endif
     k_sem_give(&audio_tx_sem);
 }
 
@@ -1207,6 +1292,10 @@ static bool push_to_gatt(struct bt_conn *conn)
          */
         if (k_sem_take(&audio_tx_sem, K_MSEC(500)) != 0) {
             LOG_WRN("Timed out waiting for live audio TX slot");
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_counter_add(BLACKBOX_COUNTER_AUDIO_TX_SLOT_TIMEOUT, 1U);
+            blackbox_record_rate_limited(BLACKBOX_EVENT_AUDIO_TX_TIMEOUT, current_mtu, tx_buffer_size, 1000U);
+#endif
             return false;
         }
 
@@ -1238,12 +1327,30 @@ static bool push_to_gatt(struct bt_conn *conn)
 
             // Log failure
             if (err) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                enum blackbox_counter error_counter = BLACKBOX_COUNTER_AUDIO_NOTIFY_OTHER_ERROR;
+                if (err == -ENOMEM) {
+                    error_counter = BLACKBOX_COUNTER_AUDIO_NOTIFY_ENOMEM;
+                } else if (err == -EAGAIN) {
+                    error_counter = BLACKBOX_COUNTER_AUDIO_NOTIFY_EAGAIN;
+                } else if (err == -EBUSY) {
+                    error_counter = BLACKBOX_COUNTER_AUDIO_NOTIFY_EBUSY;
+                } else if (err == -ENOTCONN) {
+                    error_counter = BLACKBOX_COUNTER_AUDIO_NOTIFY_ENOTCONN;
+                }
+                blackbox_counter_add(error_counter, 1U);
+                blackbox_record_rate_limited(BLACKBOX_EVENT_AUDIO_NOTIFY_ERROR, err, retry_count, 1000U);
+#endif
                 LOG_DBG("bt_gatt_notify_cb failed (err %d)", err);
                 LOG_DBG("MTU: %d, packet_size: %d", current_mtu, packet_size + NET_BUFFER_HEADER_SIZE);
                 k_sleep(K_MSEC(1));
                 retry_count++;
                 continue;
             }
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_counter_add(BLACKBOX_COUNTER_AUDIO_NOTIFY_ACCEPTED, 1U);
+#endif
 
             // Break if success (slot released in on_audio_tx_done callback)
             break;
@@ -1273,6 +1380,10 @@ static bool storage_terminal_reported;
 static void record_storage_rejection(const char *reason)
 {
     storage_rejected_frames++;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    blackbox_counter_add(BLACKBOX_COUNTER_STORAGE_REJECTED, 1U);
+    blackbox_record_rate_limited(BLACKBOX_EVENT_STORAGE_REJECTED, storage_rejected_frames, sd_storage_health(), 1000U);
+#endif
 #ifdef CONFIG_OMI_ENABLE_MONITOR
     monitor_inc_storage_write_failed();
 #endif
@@ -1318,6 +1429,9 @@ try_write_frame_to_storage(const uint8_t *frame, size_t frame_size, uint32_t fra
     k_mutex_unlock(&storage_packer_mutex);
 
     if (result == AUDIO_STORAGE_PACKER_ACCEPTED) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+        blackbox_counter_add(BLACKBOX_COUNTER_STORAGE_ACCEPTED, 1U);
+#endif
 #ifdef CONFIG_OMI_ENABLE_MONITOR
         monitor_inc_storage_write();
 #endif
@@ -1495,7 +1609,15 @@ void pusher(void)
                 }
             } else if (decision == AUDIO_STORAGE_FIRST_RETAIN) {
                 retained_tx_frame = true;
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                blackbox_counter_add(BLACKBOX_COUNTER_FRAME_RETAINED, 1U);
+                blackbox_record_rate_limited(BLACKBOX_EVENT_FRAME_RETAINED, sd_storage_health(), tx_buffer_size, 5000U);
+#endif
             } else if (decision == AUDIO_STORAGE_FIRST_DROP) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                blackbox_counter_add(BLACKBOX_COUNTER_FRAME_DROPPED, 1U);
+                blackbox_record_rate_limited(BLACKBOX_EVENT_FRAME_DROPPED, sd_storage_health(), tx_buffer_size, 1000U);
+#endif
                 record_storage_rejection("SD terminal and live delivery unavailable");
             }
 #else
@@ -1776,6 +1898,8 @@ int transport_start()
 
     LOG_INF("Transport bluetooth initialized");
 
+    bt_gatt_cb_register(&_gatt_callback_references);
+
     err = ensure_local_ble_identity();
     if (err) {
         LOG_WRN("Continuing without confirmed BLE identity (err %d)", err);
@@ -1836,6 +1960,14 @@ int transport_start()
     bt_gatt_service_register(&settings_service);
     bt_gatt_service_register(&features_service);
     bt_gatt_service_register(&time_sync_service);
+
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+    err = blackbox_register_service();
+    if (err != 0) {
+        LOG_ERR("Failed to register blackbox diagnostics service (err %d)", err);
+        return err;
+    }
+#endif
 
 #ifdef CONFIG_OMI_ENABLE_OFFLINE_STORAGE
     // Register storage service for offline audio

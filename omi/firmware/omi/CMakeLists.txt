@@ -46,6 +46,13 @@ if(CONFIG_OMI_ENABLE_BUTTON_INPUT)
     list(APPEND core_sources src/lib/core/button.c)
 endif()
 
+if(CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS)
+    list(APPEND core_sources
+        src/lib/core/blackbox.c
+        src/lib/core/blackbox_trace.c
+    )
+endif()
+
 if(CONFIG_OMI_ENABLE_OFFLINE_STORAGE)
     list(APPEND core_sources src/lib/core/storage.c)
 endif()
