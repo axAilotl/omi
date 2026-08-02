@@ -486,7 +486,7 @@ void main() {
     expect(receipt?.deviceId, 'cv1-test');
     expect(receipt?.targetWriteSeq, 212);
     expect(replacementConnection.reads.take(2), [
-      (start: 212, count: 30),
+      (start: 222, count: 20),
       (start: 200, count: 12),
     ]);
     expect(replacementConnection.successfulAdvances, [212]);
@@ -558,7 +558,7 @@ void main() {
       resumeLiveContinuity: true,
     );
     await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(otherConnection.reads, isEmpty);
+    expect(otherConnection.reads.first, (start: 100, count: 20));
     await otherSession!.cancel();
   });
 
@@ -991,184 +991,35 @@ void main() {
 
     await liveDelivered.future.timeout(const Duration(seconds: 1));
     expect(connection.reads[0], (start: 230, count: 20));
-    await Future<void>.delayed(const Duration(milliseconds: 100));
-    expect(connection.reads, hasLength(1));
+    await connection.secondRead.future.timeout(const Duration(seconds: 1));
+    expect(connection.reads[1], (start: 134, count: 96));
 
     await session!.cancel();
   });
 
-  test('live reconnect resumes at earliest recent undelivered range', () {
-    const now = _FakeRingConnection.baseTimestamp + 10000;
-    final wals = [
-      Wal(
-        timerStart: now - 8,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.synced,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_9900_9920',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 2,
-      ),
-      Wal(
-        timerStart: now - 6,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.miss,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_9920_9940',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 2,
-      ),
-      Wal(
-        timerStart: now - 4,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.miss,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_9940_9960',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 2,
-      ),
-      Wal(
-        timerStart: now - 1000,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.miss,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_100_200',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 10,
-      ),
-    ];
-
+  test('live reconnect starts at the newest bounded head slice', () {
     expect(
-      ringLiveResumeSequence(
-        wals: wals,
-        deviceId: 'cv1-test',
+      ringLiveHeadSequence(
         readSeq: 0,
         writeSeq: 10000,
-        nowSeconds: now,
-        recentSeconds: 120,
+        livePackets: 20,
       ),
-      9920,
+      9980,
     );
   });
 
-  test('live reconnect recency uses persisted capture end instead of compressed duration', () {
-    const now = _FakeRingConnection.baseTimestamp + 10000;
-    final vadSpanningWal = Wal(
-      timerStart: now - 1000,
-      codec: BleAudioCodec.opus,
-      status: WalStatus.miss,
-      storage: WalStorage.disk,
-      device: 'cv1-test',
-      sourceId: 'ring_9800_9900',
-      uploadIntent: WalUploadIntent.liveContinuity,
-      seconds: 2,
-      captureEndSeconds: now - 10,
-    );
-
+  test('live reconnect clamps a short unread tail to the device cursor', () {
     expect(
-      ringLiveResumeSequence(
-        wals: [vadSpanningWal],
-        deviceId: 'cv1-test',
+      ringLiveHeadSequence(
         readSeq: 9000,
-        writeSeq: 10000,
-        nowSeconds: now,
-        recentSeconds: 120,
+        writeSeq: 9010,
+        livePackets: 20,
       ),
-      9800,
+      9000,
     );
   });
 
-  test('live reconnect honors a configured five-minute open conversation', () {
-    const now = _FakeRingConnection.baseTimestamp + 10000;
-    final openConversationWal = Wal(
-      timerStart: now - 1000,
-      codec: BleAudioCodec.opus,
-      status: WalStatus.miss,
-      storage: WalStorage.disk,
-      device: 'cv1-test',
-      sourceId: 'ring_9800_9900',
-      uploadIntent: WalUploadIntent.liveContinuity,
-      seconds: 2,
-      captureEndSeconds: now - 180,
-    );
-
-    expect(
-      ringLiveResumeSequence(
-        wals: [openConversationWal],
-        deviceId: 'cv1-test',
-        readSeq: 9000,
-        writeSeq: 10000,
-        nowSeconds: now,
-        recentSeconds: 300,
-      ),
-      9800,
-    );
-    expect(
-      ringLiveResumeSequence(
-        wals: [openConversationWal],
-        deviceId: 'cv1-test',
-        readSeq: 9000,
-        writeSeq: 10000,
-        nowSeconds: now,
-        recentSeconds: 120,
-      ),
-      isNull,
-    );
-  });
-
-  test('delivered replay coverage suppresses an older overlapping pending range', () {
-    const now = _FakeRingConnection.baseTimestamp + 10000;
-    final wals = [
-      Wal(
-        timerStart: now - 10,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.miss,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_100_120',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 2,
-      ),
-      Wal(
-        timerStart: now - 9,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.synced,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_100_110',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 1,
-      ),
-      Wal(
-        timerStart: now - 8,
-        codec: BleAudioCodec.opus,
-        status: WalStatus.synced,
-        storage: WalStorage.disk,
-        device: 'cv1-test',
-        sourceId: 'ring_110_120',
-        uploadIntent: WalUploadIntent.liveContinuity,
-        seconds: 1,
-      ),
-    ];
-
-    expect(
-      ringLiveResumeSequence(
-        wals: wals,
-        deviceId: 'cv1-test',
-        readSeq: 90,
-        writeSeq: 130,
-        nowSeconds: now,
-        recentSeconds: 120,
-      ),
-      120,
-    );
-  });
-
-  test('reconnect reads durable replay and uncovered tail as separate ranges', () async {
+  test('reconnect reads uncovered live head before recent repair', () async {
     const now = _FakeRingConnection.baseTimestamp + 130;
     final connection = _FakeRingConnection(
       readSeq: 90,
@@ -1216,36 +1067,10 @@ void main() {
     );
 
     await connection.secondRead.future.timeout(const Duration(seconds: 3));
-    expect(connection.reads[0], (start: 100, count: 20));
-    expect(connection.reads[1], (start: 120, count: 10));
+    expect(connection.reads[0], (start: 120, count: 10));
+    expect(connection.reads[1], (start: 90, count: 10));
 
     await session!.cancel();
-  });
-
-  test('recent delivery ending at the device cursor resumes that cursor instead of the head', () {
-    const now = _FakeRingConnection.baseTimestamp + 10000;
-    final delivered = Wal(
-      timerStart: now - 10,
-      codec: BleAudioCodec.opus,
-      status: WalStatus.synced,
-      storage: WalStorage.disk,
-      device: 'cv1-test',
-      sourceId: 'ring_980_1000',
-      uploadIntent: WalUploadIntent.liveContinuity,
-      seconds: 2,
-    );
-
-    expect(
-      ringLiveResumeSequence(
-        wals: [delivered],
-        deviceId: 'cv1-test',
-        readSeq: 1000,
-        writeSeq: 1200,
-        nowSeconds: now,
-        recentSeconds: 120,
-      ),
-      1000,
-    );
   });
 
   test('live WAL stays retryable until every accepted preview frame is sent', () async {

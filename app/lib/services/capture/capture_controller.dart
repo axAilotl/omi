@@ -71,9 +71,23 @@ import 'package:omi/backend/schema/message_event.dart'
         FreemiumThresholdReachedEvent,
         SegmentsDeletedEvent;
 
+typedef InProgressConversationFetcher = Future<({List<ServerConversation> items, bool ok})> Function();
+typedef ConversationBoundarySecondsProvider = int Function();
+
+Future<({List<ServerConversation> items, bool ok})> fetchInProgressConversation() => getConversationsResult(
+      statuses: [ConversationStatus.in_progress],
+      limit: 1,
+    );
+
+int configuredConversationBoundarySeconds() =>
+    effectiveConversationBoundarySeconds(SharedPreferencesUtil().conversationSilenceDuration);
+
 class CaptureController extends ChangeNotifier
     with MessageNotifierMixin
     implements ITransctiptSegmentSocketServiceListener {
+  static const bool _blackboxHarnessEnabled = bool.fromEnvironment(
+    'OMI_BLACKBOX_HARNESS',
+  );
   static const MethodChannel _nativeBleTranscriptChannel = MethodChannel(
     'com.friend.ios/native_ble_transcript',
   );
@@ -88,6 +102,8 @@ class CaptureController extends ChangeNotifier
   final ConversationSessionWindow _conversationSessionWindow = ConversationSessionWindow();
 
   CaptureExternalActions externalActions;
+  final InProgressConversationFetcher _inProgressConversationFetcher;
+  final ConversationBoundarySecondsProvider _conversationBoundarySecondsProvider;
   DeviceOnboardingProvider? deviceOnboardingProvider;
 
   // Cache refresh for backend-created persons
@@ -101,6 +117,12 @@ class CaptureController extends ChangeNotifier
   bool _isRefreshingInProgressConversation = false;
 
   IWalService get _wal => ServiceManager.instance().wal;
+
+  void _blackboxTrace(String message) {
+    if (_blackboxHarnessEnabled) {
+      Logger.debug('[BLACKBOX_CAPTURE] $message');
+    }
+  }
 
   AudioSource? _activeSource;
 
@@ -170,8 +192,13 @@ class CaptureController extends ChangeNotifier
     return segmentPersonIds.difference(cachedIds).isNotEmpty;
   }
 
-  CaptureController({CaptureExternalActions? externalActions})
-      : externalActions = externalActions ?? const NoopCaptureExternalActions() {
+  CaptureController({
+    CaptureExternalActions? externalActions,
+    InProgressConversationFetcher inProgressConversationFetcher = fetchInProgressConversation,
+    ConversationBoundarySecondsProvider conversationBoundarySecondsProvider = configuredConversationBoundarySeconds,
+  })  : externalActions = externalActions ?? const NoopCaptureExternalActions(),
+        _inProgressConversationFetcher = inProgressConversationFetcher,
+        _conversationBoundarySecondsProvider = conversationBoundarySecondsProvider {
     // Restore a persisted device mute so it survives an app kill/restart. When
     // the device reconnects, streamDeviceRecording() reads _isPaused as
     // `wasPaused` and re-applies the mute instead of silently resuming.
@@ -717,7 +744,18 @@ class CaptureController extends ChangeNotifier
       effectiveConfig = null;
     }
 
+    // A process restart loses the in-memory owner while the backend may still
+    // have an open conversation. Reclaim it before constructing the socket so
+    // client_conversation_id is present on the first request. Loading it after
+    // the socket is ready is too late: the backend has already created a new
+    // conversation and the app-down audio becomes ownerless fragments.
+    await _reclaimInProgressConversationBeforeSocket();
+
     // Connect to the transcript socket
+    _blackboxTrace(
+      'socket_connect force=$force resume_owner=${_activeConversationId ?? 'none'} '
+      'session_start=$_sessionStartSeconds preview_segments=${segments.length}',
+    );
     final connectedSocket = await ServiceManager.instance().socket.conversation(
           codec: codec,
           sampleRate: sampleRate,
@@ -2194,31 +2232,73 @@ class CaptureController extends ChangeNotifier
     }
   }
 
-  Future _loadInProgressConversation() async {
-    var convos = await getConversations(
-      statuses: [ConversationStatus.in_progress],
-      limit: 1,
+  Future<void> _reclaimInProgressConversationBeforeSocket() async {
+    if (_activeConversationId != null) return;
+
+    final result = await _inProgressConversationFetcher();
+    if (!result.ok) {
+      _blackboxTrace('pre_socket_reclaim outcome=fetch_failed');
+      return;
+    }
+    if (result.items.isEmpty) {
+      _blackboxTrace('pre_socket_reclaim outcome=none');
+      return;
+    }
+
+    final conversation = result.items.first;
+    _conversation = conversation;
+    _activeConversationId = conversation.id;
+    final authoritativeStart = (conversation.startedAt ?? conversation.createdAt).millisecondsSinceEpoch ~/ 1000;
+    _sessionStartSeconds = _conversationSessionWindow.reclaim(
+      conversationId: conversation.id,
+      serverStartedAtSeconds: authoritativeStart,
+      nowSeconds: _nowSeconds,
     );
-    _conversation = convos.isNotEmpty ? convos.first : null;
+    _applyInProgressConversationProjection(conversation);
+    _blackboxTrace(
+      'pre_socket_reclaim outcome=reclaimed owner=${conversation.id} '
+      'session_start=$_sessionStartSeconds server_start=$authoritativeStart',
+    );
+  }
+
+  @visibleForTesting
+  Future<void> reclaimInProgressConversationBeforeSocketForTesting() => _reclaimInProgressConversationBeforeSocket();
+
+  @visibleForTesting
+  String? get activeConversationIdForTesting => _activeConversationId;
+
+  @visibleForTesting
+  int get sessionStartSecondsForTesting => _sessionStartSeconds;
+
+  void _applyInProgressConversationProjection(ServerConversation conversation) {
+    segments = LiveTranscriptPreview.reconcile(
+      current: segments,
+      serverSnapshot: conversation.transcriptSegments,
+    );
+    // Merge server photos with locally-captured temp photos to avoid losing
+    // photos that haven't been processed server-side yet.
+    final serverPhotos = conversation.photos;
+    final localTempPhotos = photos.where((p) => p.id.startsWith('temp_img_')).toList();
+    final serverPhotoIds = serverPhotos.map((p) => p.id).toSet();
+    final mergedPhotos = List<ConversationPhoto>.from(serverPhotos);
+    for (final local in localTempPhotos) {
+      if (!serverPhotoIds.contains(local.id)) {
+        mergedPhotos.add(local);
+      }
+    }
+    photos = mergedPhotos;
+  }
+
+  Future _loadInProgressConversation() async {
+    final result = await _inProgressConversationFetcher();
+    if (!result.ok) {
+      _blackboxTrace('in_progress_refresh outcome=fetch_failed');
+      return;
+    }
+    _conversation = result.items.isNotEmpty ? result.items.first : null;
     if (_conversation != null) {
       _activeConversationId ??= _conversation!.id;
-      segments = LiveTranscriptPreview.reconcile(
-        current: segments,
-        serverSnapshot: _conversation!.transcriptSegments,
-      );
-      // Merge server photos with locally-captured temp photos to avoid losing
-      // photos that haven't been processed server-side yet.
-      final serverPhotos = _conversation!.photos;
-      final localTempPhotos = photos.where((p) => p.id.startsWith('temp_img_')).toList();
-      final serverPhotoIds = serverPhotos.map((p) => p.id).toSet();
-      // Keep local temp photos that aren't already on the server
-      final mergedPhotos = List<ConversationPhoto>.from(serverPhotos);
-      for (final local in localTempPhotos) {
-        if (!serverPhotoIds.contains(local.id)) {
-          mergedPhotos.add(local);
-        }
-      }
-      photos = mergedPhotos;
+      _applyInProgressConversationProjection(_conversation!);
     } else if (!_canRefreshInProgressConversation) {
       segments = [];
       photos = [];
@@ -2236,16 +2316,33 @@ class CaptureController extends ChangeNotifier
         'phase=${event.lifecyclePhase ?? 'legacy'}',
       );
       if (event.isInProgress) {
+        final previousOwner = _activeConversationId;
         _activeConversationId = event.conversationId;
         _sessionStartSeconds = _conversationSessionWindow.observe(
           conversationId: event.conversationId,
           nowSeconds: _nowSeconds,
+        );
+        _blackboxTrace(
+          'session_in_progress owner=${event.conversationId} '
+          'previous_owner=${previousOwner ?? 'none'} '
+          'recording_session=${event.recordingSessionId ?? 'none'} '
+          'lifecycle_version=${event.lifecycleVersion ?? -1} '
+          'lifecycle_sequence=${event.lifecycleSequence ?? -1} '
+          'session_start=$_sessionStartSeconds '
+          'next_start=${_conversationSessionWindow.nextStartSeconds ?? 0}',
         );
       }
       return;
     }
 
     if (event is ConversationProcessingStartedEvent) {
+      final completionObservedAtSeconds = _nowSeconds;
+      final storageAuthoritativeCompletion = _ringAudioTailSession != null ||
+          DeviceStorageProtocolPolicy.usesStorageAuthoritativeAudio(
+            _recordingDevice?.firmwareRevision,
+          );
+      final activeOwnerBeforeCompletion = _activeConversationId;
+      final queuedStartBeforeCompletion = _conversationSessionWindow.nextStartSeconds;
       if (_activeConversationId == event.memory.id) {
         _activeConversationId = null;
       }
@@ -2256,11 +2353,23 @@ class CaptureController extends ChangeNotifier
       );
       _pendingAutoSyncConversationId = event.memory.id;
 
+      _blackboxTrace(
+        'processing_started owner=${event.memory.id} '
+        'active_before=${activeOwnerBeforeCompletion ?? 'none'} '
+        'queued_start_before=${queuedStartBeforeCompletion ?? 0} '
+        'completed_start=$_pendingAutoSyncSessionStart '
+        'next_start=${_conversationSessionWindow.nextStartSeconds ?? 0} '
+        'server_started_at=${event.memory.startedAt?.millisecondsSinceEpoch ?? 0} '
+        'server_segments=${event.memory.transcriptSegments.length}',
+      );
+
       // Force-drain tail buffer, stamp WALs with conversation ID, then clear state.
       // Store the future so the coordinated transfer wake waits for the stamp.
       _pendingFinalizeAndStamp = _finalizeAndStampSession(
         _pendingAutoSyncSessionStart,
         event.memory,
+        completionObservedAtSeconds: completionObservedAtSeconds,
+        storageAuthoritative: storageAuthoritativeCompletion,
       );
 
       _resetStateVariables();
@@ -2444,8 +2553,10 @@ class CaptureController extends ChangeNotifier
   /// Called from synchronous onMessageEventReceived — fire-and-forget async.
   Future<void> _finalizeAndStampSession(
     int sessionStartSeconds,
-    ServerConversation conversation,
-  ) async {
+    ServerConversation conversation, {
+    required int completionObservedAtSeconds,
+    required bool storageAuthoritative,
+  }) async {
     try {
       final phoneSync = _wal.getSyncs().phone;
       await phoneSync.finalizeCurrentSession();
@@ -2453,13 +2564,25 @@ class CaptureController extends ChangeNotifier
         final hasServerSpeechProof = ConversationCaptureWindow.hasServerSpeechProof(
           conversation.transcriptSegments,
         );
-        final captureWindow = ConversationCaptureWindow.fromTranscript(
-          sessionOriginSeconds: conversation.startedAt == null
-              ? sessionStartSeconds
-              : conversation.startedAt!.millisecondsSinceEpoch ~/ 1000,
+        final sessionOriginSeconds = conversation.startedAt == null
+            ? sessionStartSeconds
+            : conversation.startedAt!.millisecondsSinceEpoch ~/ 1000;
+        final captureWindow = ConversationCaptureWindow.forCompletion(
+          storageAuthoritative: storageAuthoritative,
+          sessionOriginSeconds: sessionOriginSeconds,
           fallbackStartSeconds: sessionStartSeconds,
-          fallbackEndSeconds: _nowSeconds,
+          completionObservedAtSeconds: completionObservedAtSeconds,
+          conversationBoundarySeconds: _conversationBoundarySecondsProvider(),
           segments: conversation.transcriptSegments,
+        );
+        _blackboxTrace(
+          'canonical_stamp owner=${conversation.id} '
+          'session_start=$sessionStartSeconds '
+          'capture_start=${captureWindow.startSeconds} '
+          'capture_end=${captureWindow.endSeconds} '
+          'storage_authoritative=$storageAuthoritative '
+          'speech_proof=$hasServerSpeechProof '
+          'next_start=${_conversationSessionWindow.nextStartSeconds ?? 0}',
         );
         await phoneSync.stampConversationId(
           captureWindow.startSeconds,

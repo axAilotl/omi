@@ -152,7 +152,13 @@ void main() {
           statusFetches++;
           return {'stage': 'none'};
         },
-        uploader: (files, {onUploadProgress, conversationId, syncLane = SyncUploadLane.fresh}) async =>
+        uploader: (
+          files, {
+          onUploadProgress,
+          conversationId,
+          syncLane = SyncUploadLane.fresh,
+          replaceTranscript = false,
+        }) async =>
             UploadFilesResult.queued('job-1'),
       );
 
@@ -174,7 +180,13 @@ void main() {
           statusFetches++;
           return {'stage': 'none'};
         },
-        uploader: (files, {onUploadProgress, conversationId, syncLane = SyncUploadLane.fresh}) async =>
+        uploader: (
+          files, {
+          onUploadProgress,
+          conversationId,
+          syncLane = SyncUploadLane.fresh,
+          replaceTranscript = false,
+        }) async =>
             UploadFilesResult.queued('job-2'),
       );
 

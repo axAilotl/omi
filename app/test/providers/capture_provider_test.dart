@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+// ignore: depend_on_referenced_packages
 import 'package:connectivity_plus_platform_interface/connectivity_plus_platform_interface.dart';
 import 'package:fake_async/fake_async.dart';
 import 'package:flutter/material.dart';
@@ -13,6 +14,7 @@ import 'package:omi/backend/preferences.dart';
 import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/backend/schema/conversation.dart';
 import 'package:omi/backend/schema/message_event.dart';
+import 'package:omi/backend/schema/structured.dart';
 import 'package:omi/backend/schema/transcript_segment.dart';
 import 'package:omi/env/env.dart';
 import 'package:omi/l10n/app_localizations.dart';
@@ -416,7 +418,7 @@ void main() {
   });
 
   group('People cache refresh', () {
-    TranscriptSegment _segmentWithPerson(String id, String? personId) {
+    TranscriptSegment segmentWithPerson(String id, String? personId) {
       return TranscriptSegment(
         id: id,
         text: 'text',
@@ -435,10 +437,10 @@ void main() {
       provider.updateExternalActions(mockExternalActions);
 
       // Pre-populate segments to skip platform-specific initialization code
-      provider.segments = [_segmentWithPerson('seed', null)];
+      provider.segments = [segmentWithPerson('seed', null)];
 
       // Segment with personId that's not in cache (cachedPeople is empty)
-      final segments = [_segmentWithPerson('seg1', 'unknown-person-id')];
+      final segments = [segmentWithPerson('seg1', 'unknown-person-id')];
 
       provider.onSegmentReceived(segments);
 
@@ -452,9 +454,9 @@ void main() {
       provider.updateExternalActions(mockExternalActions);
 
       // Pre-populate segments to skip platform-specific initialization code
-      provider.segments = [_segmentWithPerson('seed', null)];
+      provider.segments = [segmentWithPerson('seed', null)];
 
-      final segments = [_segmentWithPerson('seg2', null)];
+      final segments = [segmentWithPerson('seg2', null)];
 
       provider.onSegmentReceived(segments);
 
@@ -473,17 +475,17 @@ void main() {
       provider.updateExternalActions(mockExternalActions);
 
       // Pre-populate segments to skip platform-specific initialization code
-      provider.segments = [_segmentWithPerson('seed', null)];
+      provider.segments = [segmentWithPerson('seed', null)];
 
       // First segment with unknown personId
-      final segments1 = [_segmentWithPerson('seg-a', 'unknown-1')];
+      final segments1 = [segmentWithPerson('seg-a', 'unknown-1')];
       provider.onSegmentReceived(segments1);
 
       // Should trigger first call
       expect(mockExternalActions.setPeopleCallCount, 1);
 
       // Second segment with different unknown personId while first is still in-flight
-      final segments2 = [_segmentWithPerson('seg-b', 'unknown-2')];
+      final segments2 = [segmentWithPerson('seg-b', 'unknown-2')];
       provider.onSegmentReceived(segments2);
 
       // Should NOT trigger another call (first is still in-flight)
@@ -494,7 +496,7 @@ void main() {
       await Future.delayed(Duration.zero); // Let the future complete
 
       // Third segment - now a new call should be allowed
-      final segments3 = [_segmentWithPerson('seg-c', 'unknown-3')];
+      final segments3 = [segmentWithPerson('seg-c', 'unknown-3')];
       provider.onSegmentReceived(segments3);
 
       // Should trigger a new call
@@ -552,7 +554,7 @@ void main() {
   });
 
   group('onClosed warning snackbar', () {
-    Future<void> _pumpAppWithScaffold(WidgetTester tester) async {
+    Future<void> pumpAppWithScaffold(WidgetTester tester) async {
       await tester.pumpWidget(
         MaterialApp(
           navigatorKey: globalNavigatorKey,
@@ -574,7 +576,7 @@ void main() {
       provider.onConnectionStateChanged(true);
       provider.updateRecordingState(RecordingState.record);
 
-      await _pumpAppWithScaffold(tester);
+      await pumpAppWithScaffold(tester);
 
       provider.onClosed();
       // Prevent keepalive reconnect branch from attempting websocket work in this test.
@@ -594,7 +596,7 @@ void main() {
       provider.onConnectionStateChanged(true);
       provider.updateRecordingState(RecordingState.stop);
 
-      await _pumpAppWithScaffold(tester);
+      await pumpAppWithScaffold(tester);
 
       provider.onClosed();
       await tester.pump();
@@ -1181,10 +1183,10 @@ void main() {
     test('connectivity flicker does not toggle readiness of a ready socket', () {
       final provider = CaptureProvider();
 
-      // Drive the provider into the socket-subscribed state (the scenario the
-      // old getter got wrong): onConnected mirrors the transcript WebSocket
-      // subscribing, which sets _transcriptServiceReady = true.
+      // A connected transport is not ready until the backend accepts the STT
+      // session. Drive both transitions before testing connectivity flicker.
       provider.onConnected();
+      provider.onMessageEventReceived(MessageServiceStatusEvent(status: 'ready'));
       expect(provider.transcriptServiceReady, isTrue);
 
       // A connectivity flicker must not toggle readiness off. Before the fix
@@ -1200,6 +1202,51 @@ void main() {
       // A socket close is the only thing that should end readiness.
       provider.onClosed();
       expect(provider.transcriptServiceReady, isFalse, reason: 'socket close must end transcript readiness');
+      provider.dispose();
+    });
+  });
+
+  group('cold-start conversation ownership reclaim', () {
+    test('reclaims the in-progress owner and server start before socket creation', () async {
+      final startedAt = DateTime.now().toUtc().subtract(const Duration(seconds: 45));
+      final conversation = ServerConversation(
+        id: 'conversation-reclaimed',
+        createdAt: startedAt,
+        startedAt: startedAt,
+        structured: Structured('', ''),
+        status: ConversationStatus.in_progress,
+        transcriptSegments: [_segment('existing', 'before restart')],
+      );
+      final provider = CaptureProvider(
+        inProgressConversationFetcher: () async => (
+          items: [conversation],
+          ok: true,
+        ),
+      );
+
+      await provider.reclaimInProgressConversationBeforeSocketForTesting();
+
+      expect(provider.activeConversationIdForTesting, 'conversation-reclaimed');
+      expect(
+        provider.sessionStartSecondsForTesting,
+        startedAt.millisecondsSinceEpoch ~/ 1000,
+      );
+      expect(provider.segments.map((segment) => segment.text), contains('before restart'));
+      provider.dispose();
+    });
+
+    test('does not manufacture a new owner when the reclaim fetch fails', () async {
+      final provider = CaptureProvider(
+        inProgressConversationFetcher: () async => (
+          items: <ServerConversation>[],
+          ok: false,
+        ),
+      );
+
+      await provider.reclaimInProgressConversationBeforeSocketForTesting();
+
+      expect(provider.activeConversationIdForTesting, isNull);
+      expect(provider.sessionStartSecondsForTesting, 0);
       provider.dispose();
     });
   });

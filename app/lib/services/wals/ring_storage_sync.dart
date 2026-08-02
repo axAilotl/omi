@@ -55,58 +55,16 @@ bool ringShouldDrainDeepBacklog({
 }) =>
     autoSyncEnabled;
 
-/// Chooses the first sequence that must be replayed into a replacement live
-/// transcription socket.
-///
-/// A pendant can have hours of unread history behind its durable read cursor.
-/// Reconnecting at that cursor starves the active conversation behind old
-/// backlog. Recent live-continuity WALs describe the correct boundary: replay
-/// from the earliest recent range that never completed socket delivery, or
-/// continue after the newest recently delivered range when none are pending.
-int? ringLiveResumeSequence({
-  required Iterable<Wal> wals,
-  required String deviceId,
+/// Chooses the newest bounded slice for a replacement live transcription
+/// socket. Missing recent coverage is repaired by the recovery lane after this
+/// live slice; it must never be replayed ahead of newly captured speech.
+int ringLiveHeadSequence({
   required int readSeq,
   required int writeSeq,
-  required int nowSeconds,
-  required int recentSeconds,
+  required int livePackets,
 }) {
-  int? earliestPending;
-  int? newestDeliveredEnd;
-  final deliveredCoverage = RingSequenceCoverage();
-  final pendingRanges = <({int start, int end})>[];
-  final cutoff = nowSeconds - recentSeconds;
-  for (final wal in wals) {
-    if (wal.device != deviceId ||
-        wal.uploadIntent != WalUploadIntent.liveContinuity ||
-        wal.wallClockEndSeconds < cutoff) {
-      continue;
-    }
-    final range = RingProtocol.parseSourceRange(wal.sourceId);
-    if (range == null || range.end < readSeq || range.start >= writeSeq) continue;
-    final start = range.start.clamp(readSeq, writeSeq).toInt();
-    final end = range.end.clamp(readSeq, writeSeq).toInt();
-    if (wal.status == WalStatus.miss) {
-      if (start < end) pendingRanges.add((start: start, end: end));
-      continue;
-    }
-    if (wal.status == WalStatus.synced) {
-      if (start < end) deliveredCoverage.add(start, end);
-      if (newestDeliveredEnd == null || end > newestDeliveredEnd) {
-        newestDeliveredEnd = end;
-      }
-    }
-  }
-  for (final pending in pendingRanges) {
-    final uncovered = deliveredCoverage.firstUncovered(
-      pending.start,
-      pending.end,
-    );
-    if (uncovered < pending.end && (earliestPending == null || uncovered < earliestPending)) {
-      earliestPending = uncovered;
-    }
-  }
-  return earliestPending ?? newestDeliveredEnd;
+  final candidate = writeSeq - livePackets;
+  return candidate > readSeq ? candidate : readSeq;
 }
 
 class RingAudioTailSession {
@@ -521,13 +479,10 @@ class RingStorageSyncImpl implements RingStorageSync {
       );
       if (_tailGeneration != generation || _device?.id != device.id) return null;
       final resumeLiveSeq = resumeLiveContinuity
-          ? ringLiveResumeSequence(
-              wals: await _localSync?.getAllWals() ?? const <Wal>[],
-              deviceId: device.id,
+          ? ringLiveHeadSequence(
               readSeq: initialInfo.readSeq,
               writeSeq: initialInfo.writeSeq,
-              nowSeconds: _nowSeconds(),
-              recentSeconds: conversationTimeoutSeconds,
+              livePackets: _livePacketsPerRead(codec),
             )
           : null;
       if (_tailGeneration != generation || _device?.id != device.id) return null;
@@ -798,7 +753,10 @@ class RingStorageSyncImpl implements RingStorageSync {
     final sourceFramesPerRecord = _framesPerRecord(codec);
     int? liveCursor = resumeLiveSeq;
     int? recentCursor;
-    var recentRecoveryExhausted = resumeLiveContinuity;
+    // Reconnect starts at the live head. The recent-recovery lane separately
+    // repairs the newest uncovered gap after every live poll, so a long open
+    // conversation cannot block the preview behind minutes of replay.
+    var recentRecoveryExhausted = false;
     DateTime? partialLiveSince;
     var lastSnapshotAt = DateTime.now();
     int? automaticBacklogTargetSeq;
@@ -868,38 +826,19 @@ class RingStorageSyncImpl implements RingStorageSync {
         // cloud jobs. A growing read catches up in one bounded transaction;
         // it must never manufacture a new hole merely to shave latency.
         var liveStart = liveCursor ?? desiredLiveStart;
-        // A reconnect deliberately re-reads recent `miss` ranges so they can
-        // enter the replacement STT socket. They are already durable and
-        // therefore present in [coverage], but not yet delivered.
-        if (!resumeLiveContinuity) {
-          liveStart = coverage.firstUncovered(liveStart, info.writeSeq);
-        }
+        // Durable ranges, including retryable `miss` WALs, belong to canonical
+        // post-processing. Replaying them into the replacement live socket
+        // delays the preview and can duplicate already accepted speech.
+        liveStart = coverage.firstUncovered(liveStart, info.writeSeq);
         final availableLiveCount = info.writeSeq - liveStart;
         var liveCount = resumeLiveContinuity && availableLiveCount > _backlogPacketsPerSlice
             ? _backlogPacketsPerSlice
             : availableLiveCount;
-        if (resumeLiveContinuity && liveCount > 0) {
-          final proposedEnd = liveStart + liveCount;
-          final coveredEnd = coverage.contiguousEndFrom(liveStart);
-          if (coveredEnd > liveStart && coveredEnd < proposedEnd) {
-            // Finish the durable replay before reading newly uncovered audio.
-            // Otherwise a reconnect can persist one range that crosses the
-            // old/new boundary and cannot be reduced without duplicating or
-            // discarding audio during canonical assembly.
-            liveCount = coveredEnd - liveStart;
-          } else if (coveredEnd == liveStart) {
-            final nextCovered = coverage.firstRangeAtOrAfter(liveStart);
-            if (nextCovered != null && nextCovered.start > liveStart && nextCovered.start < proposedEnd) {
-              // Symmetric case: finish the uncovered prefix before entering
-              // an already durable island.
-              liveCount = nextCovered.start - liveStart;
-            }
-          }
-        }
 
         if (liveCount > 0) {
           partialLiveSince ??= DateTime.now();
-          final rangeReady = liveCount >= livePackets ||
+          final rangeReady = resumeLiveContinuity ||
+              liveCount >= livePackets ||
               DateTime.now().difference(partialLiveSince) >= _partialLiveRangeDeadline ||
               info.readSeq < desiredLiveStart;
           if (rangeReady) {
@@ -938,7 +877,9 @@ class RingStorageSyncImpl implements RingStorageSync {
          */
         recentCursor ??= desiredLiveStart;
         var recoveredRecentSlice = false;
-        if (!recentRecoveryExhausted) {
+        final pendingManualTarget = _hasRequestedBacklogDrain(generation) ? _requestedBacklogTargetSeq : null;
+        final manualSnapshotPending = pendingManualTarget != null && info.readSeq < pendingManualTarget;
+        if (!recentRecoveryExhausted && !manualSnapshotPending) {
           final recentRange = coverage.lastUncoveredBefore(
             info.readSeq,
             recentCursor,

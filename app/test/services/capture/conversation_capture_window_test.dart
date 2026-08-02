@@ -30,6 +30,56 @@ void main() {
     expect(window.endSeconds, 1200);
   });
 
+  test('storage lifecycle keeps wall-clock audio beyond compressed transcript offsets', () {
+    final window = ConversationCaptureWindow.fromStorageLifecycle(
+      sessionOriginSeconds: 1000,
+      fallbackStartSeconds: 700,
+      completionObservedAtSeconds: 1450,
+      conversationBoundarySeconds: 120,
+      segments: [
+        _segment(start: 0, end: 200),
+      ],
+    );
+
+    expect(window.startSeconds, 995);
+    expect(
+      window.endSeconds,
+      1335,
+      reason: 'natural completion at 1450 proves speech through roughly 1450 - 120 even when VAD compressed STT time',
+    );
+  });
+
+  test('storage lifecycle never expands beyond the observed completion edge', () {
+    final window = ConversationCaptureWindow.fromStorageLifecycle(
+      sessionOriginSeconds: 1000,
+      fallbackStartSeconds: 990,
+      completionObservedAtSeconds: 1100,
+      conversationBoundarySeconds: 120,
+      segments: [
+        _segment(start: 0, end: 500),
+      ],
+    );
+
+    expect(window.startSeconds, 995);
+    expect(window.endSeconds, 1100);
+  });
+
+  test('completion policy preserves transcript-clock bounds for non-storage capture', () {
+    final window = ConversationCaptureWindow.forCompletion(
+      storageAuthoritative: false,
+      sessionOriginSeconds: 1000,
+      fallbackStartSeconds: 700,
+      completionObservedAtSeconds: 1450,
+      conversationBoundarySeconds: 120,
+      segments: [
+        _segment(start: 10, end: 20),
+      ],
+    );
+
+    expect(window.startSeconds, 1008);
+    expect(window.endSeconds, 1022);
+  });
+
   test('requires non-empty timed transcript text as server speech proof', () {
     expect(
       ConversationCaptureWindow.hasServerSpeechProof([

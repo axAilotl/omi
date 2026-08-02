@@ -2168,7 +2168,7 @@ void main() {
       expect(externalSync.testWals.single.captureEndSeconds, now - 0.25);
     });
 
-    test('conversation stamping claims the complete configured ring window', () async {
+    test('conversation stamping never absorbs continuous ring audio outside the session window', () async {
       final directory = await Directory.systemTemp.createTemp(
         'omi_ring_conversation_window_',
       );
@@ -2234,18 +2234,22 @@ void main() {
         sessionEndSeconds: 1111,
       );
 
-      expect(externalSync.testWals, hasLength(2));
+      expect(externalSync.testWals, hasLength(4));
       final canonical = externalSync.testWals.singleWhere(
         (wal) => wal.sourceId?.startsWith('canonical_complete-window_') == true,
       );
       expect(canonical.conversationId, 'complete-window');
-      expect(canonical.timerStart, 1000);
-      expect(canonical.captureEndSeconds, 1221);
+      expect(canonical.timerStart, 1110);
+      expect(canonical.captureEndSeconds, 1111);
       expect(canonical.status, WalStatus.synced);
-      final outside = externalSync.testWals.singleWhere(
-        (wal) => wal.sourceId == 'ring_13_14',
+      final outside = externalSync.testWals.where(
+        (wal) => wal.sourceId != canonical.sourceId,
       );
-      expect(outside.conversationId, isNull);
+      expect(
+        outside.map((wal) => wal.sourceId).toSet(),
+        {'ring_10_11', 'ring_12_13', 'ring_13_14'},
+      );
+      expect(outside.every((wal) => wal.conversationId == null), isTrue);
     });
 
     test('conversation ownership without speech proof cannot create an upload job', () async {
@@ -2690,17 +2694,20 @@ void main() {
       );
     });
 
-    test('post-commit late ring audio inherits canonical ownership and never uploads alone', () async {
+    test('only a time-overlapping recovery inherits completed canonical ownership', () async {
       SyncRateLimiter.instance.clear();
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
       final canonicalName = 'canonical_post_commit_${DateTime.now().microsecondsSinceEpoch}.bin';
       final lateName = 'canonical_post_commit_late_${DateTime.now().microsecondsSinceEpoch}.bin';
+      final overlapName = 'canonical_post_commit_overlap_${DateTime.now().microsecondsSinceEpoch}.bin';
       final canonicalFile = File('${Directory.systemTemp.path}/$canonicalName');
       final lateFile = File('${Directory.systemTemp.path}/$lateName');
+      final overlapFile = File('${Directory.systemTemp.path}/$overlapName');
       await canonicalFile.writeAsBytes([1, 0, 0, 0, 7], flush: true);
       await lateFile.writeAsBytes([1, 0, 0, 0, 8], flush: true);
+      await overlapFile.writeAsBytes([1, 0, 0, 0, 9], flush: true);
       addTearDown(() async {
-        for (final file in [canonicalFile, lateFile]) {
+        for (final file in [canonicalFile, lateFile, overlapFile]) {
           if (await file.exists()) await file.delete();
         }
       });
@@ -2748,16 +2755,31 @@ void main() {
         sourceId: 'ring_11_12',
         uploadIntent: WalUploadIntent.liveContinuity,
       );
+      final overlap = Wal(
+        timerStart: now - 10,
+        codec: BleAudioCodec.opus,
+        seconds: 1,
+        totalFrames: 1,
+        captureEndSeconds: now - 9,
+        status: WalStatus.miss,
+        storage: WalStorage.disk,
+        originalStorage: WalStorage.sdcard,
+        filePath: overlapName,
+        device: 'same-device',
+        sourceId: 'ring_9_11',
+        uploadIntent: WalUploadIntent.liveContinuity,
+      );
       final externalSync = LocalWalSyncImpl(
         listener,
         uploadGate: gate,
         walPersister: (_) async => true,
       )..testWals = [canonical];
 
+      await externalSync.addExternalWal(overlap, scheduleUpload: false);
       await externalSync.addExternalWal(late, scheduleUpload: false);
-      await externalSync.syncWal(wal: late);
 
-      expect(late.conversationId, 'conversation-post-commit');
+      expect(overlap.conversationId, 'conversation-post-commit');
+      expect(late.conversationId, isNull);
       expect(late.status, WalStatus.miss);
       expect(uploadCalls, 0);
       expect(

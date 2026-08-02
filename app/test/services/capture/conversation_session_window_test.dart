@@ -73,5 +73,41 @@ void main() {
       );
       expect(window.nextStartSeconds, isNull);
     });
+
+    test('reclaims the authoritative server start after an app restart', () {
+      final window = ConversationSessionWindow();
+
+      expect(
+        window.reclaim(
+          conversationId: 'conversation-a',
+          serverStartedAtSeconds: 80,
+          nowSeconds: 120,
+        ),
+        80,
+      );
+      expect(window.observe(conversationId: 'conversation-a', nowSeconds: 121), 80);
+      expect(
+        window.complete(
+          conversationId: 'conversation-a',
+          fallbackStartSeconds: 120,
+        ),
+        80,
+      );
+    });
+
+    test('keeps earlier locally captured audio when reclaiming an owner', () {
+      final window = ConversationSessionWindow();
+
+      window.ensureStarted(75);
+
+      expect(
+        window.reclaim(
+          conversationId: 'conversation-a',
+          serverStartedAtSeconds: 80,
+          nowSeconds: 120,
+        ),
+        75,
+      );
+    });
   });
 }
