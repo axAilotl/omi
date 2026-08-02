@@ -111,8 +111,6 @@ static void response_complete(struct bt_conn *conn, void *user_data)
     ARG_UNUSED(conn);
     ARG_UNUSED(user_data);
     atomic_clear(&response_in_flight);
-    memset(event_last_ms, 0, sizeof(event_last_ms));
-    memset(event_seen, 0, sizeof(event_seen));
 }
 
 static int notify_response(struct bt_conn *conn, uint16_t response_len)
@@ -309,6 +307,8 @@ static ssize_t blackbox_command_write(struct bt_conn *conn,
         uint32_t ttl_seconds = len >= 5U ? sys_get_le32(&command_data[1]) : BLACKBOX_TRACE_DEFAULT_TTL_SECONDS;
         ttl_seconds = CLAMP(ttl_seconds, 1U, BLACKBOX_TRACE_MAX_TTL_SECONDS);
         k_spinlock_key_t key = k_spin_lock(&state_lock);
+        memset(event_last_ms, 0, sizeof(event_last_ms));
+        memset(event_seen, 0, sizeof(event_seen));
         blackbox_trace_start(&trace, blackbox_now_ms(), ttl_seconds);
         (void) blackbox_trace_record(
             &trace, blackbox_now_ms(), BLACKBOX_EVENT_TRACE_STARTED, 0U, (int32_t) ttl_seconds, 0);
@@ -336,6 +336,8 @@ static ssize_t blackbox_command_write(struct bt_conn *conn,
     case BLACKBOX_COMMAND_CLEAR_TRACE: {
         k_spinlock_key_t key = k_spin_lock(&state_lock);
         blackbox_trace_clear(&trace);
+        memset(event_last_ms, 0, sizeof(event_last_ms));
+        memset(event_seen, 0, sizeof(event_seen));
         k_spin_unlock(&state_lock, key);
         response_len = build_ack(command, 0);
         break;
@@ -365,6 +367,8 @@ int blackbox_init(uint32_t reset_reason, uint32_t boot_count)
         atomic_clear(&counters[i]);
     }
     atomic_clear(&response_in_flight);
+    memset(event_last_ms, 0, sizeof(event_last_ms));
+    memset(event_seen, 0, sizeof(event_seen));
     blackbox_trace_init(&trace, trace_storage, ARRAY_SIZE(trace_storage));
     runtime_state.reset_reason = reset_reason;
     runtime_state.boot_count = boot_count;

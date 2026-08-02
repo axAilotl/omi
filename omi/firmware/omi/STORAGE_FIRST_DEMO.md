@@ -12,15 +12,20 @@ source, and the phone is a resumable synchronization peer.
   frame and prevents later frames from overtaking it.
 - Terminal SD failure may fall back to live BLE so simultaneous media failure
   does not force avoidable loss.
-- Live preview is disabled in this demo. This avoids duplicating the same audio
-  through the live stream and subsequent ring drain until both paths share a
-  capture identity that the apps can deduplicate.
+- Live preview is read from the newest bounded SD-ring slice. The legacy audio
+  notification path is disabled, so there is still exactly one source for each
+  frame and no cross-transport deduplication guess.
+- After a reconnect, current audio is read first. The app repairs the newest
+  uncovered interval on a separate durable lane and leaves old history alone
+  unless the user explicitly starts a bounded sync.
 - The existing bounded ring protocol remains the retrieval path: READ_BEGIN,
   exact sequence range, byte CRC, durable phone registration, then ADVANCE.
 
-The demo reports firmware `3.0.29`. It must not be published as a production
-release. Flash it only onto the designated second CV1. Retain a hardware
-recovery path because an older OTA image may be rejected as a downgrade.
+The public-candidate demo reports firmware `3.0.29`. The isolated diagnostic
+line reports `3.0.30+101`, adds a 12-hour sampled trace and cumulative counters,
+and is compiled into the `codex/cv1-blackbox-diagnostics` branch only. Neither
+line is a production release. Retain a hardware recovery path because an older
+OTA image may be rejected as a downgrade.
 
 ## Build
 
@@ -48,7 +53,7 @@ result.
 4. Repeat with app force-stop, phone reboot, CV1 reboot, weak RF, and a one-hour
    backlog.
 5. Compare recovered Opus frames against the reference timeline and the
-   firmware's start/end ring sequence.
+firmware's start/end ring sequence.
 
 Required outcomes:
 
@@ -59,7 +64,55 @@ Required outcomes:
   recovered periods.
 - Storage saturation or terminal media failure is explicit in diagnostics.
 
-This firmware intentionally sacrifices live transcription latency. Adding live
-preview requires one monotonic capture identity stored with each frame and sent
-in its BLE header, plus native Android/iOS deduplication before preview is
-enabled.
+## App contract
+
+The storage-first firmware is only testable with an app that honors all of the
+following rules:
+
+- never start the legacy live characteristic beside the SD-ring tail;
+- reconnect at the newest bounded ring head before repairing recent coverage;
+- preserve the active server conversation owner and preview across a transport
+  replacement or process restart;
+- keep individual sequence WALs local and compact the completed lifecycle
+  window into one canonical recording;
+- derive the canonical close from the server lifecycle in wall-clock time.
+  Transcript offsets alone are invalid for this purpose because pendant VAD
+  and disconnected intervals compress the audio clock;
+- run historical backlog only after an explicit user request. Charging is not
+  authority to compete with live transcription.
+
+The exact authenticated Android/iOS build and provisioning process is recorded
+in `app/e2e/CV1_BLACKBOX_DEVICE_TESTING.md`. Do not recreate Firebase files,
+bundle identifiers, or signing settings from memory.
+
+## Current physical evidence
+
+The diagnostic firmware has been flashed over the app DFU path and remained
+recoverable. A 12-hour firmware export reported no storage rejection, packet
+drop, microphone, notification, or sync error; two link-setup errors recovered
+and the final link negotiated 15 ms, MTU 498, 2M PHY, and DLE 251.
+
+On the Samsung Android fixture, a forced 23.6-second radio outage reconnected
+without app relaunch. The replacement tail read the current 25-record head in
+1.9 seconds after app-level connection, then repaired the preceding 96-record
+gap. Live preview remained on the same owner. The same run exposed and fixed a
+wall-clock ownership defect: STT offsets closed the canonical source before
+speech captured after a recovered gap. The regression now uses the configured
+conversation-silence lifecycle edge for storage-authoritative close bounds.
+The corrected rerun compacted 27 ring WALs into one 69-second, 3,439-frame
+canonical file containing the before/offline/after markers in order.
+
+On the iPhone fixture, process termination and relaunch preserved 5,342 frames
+across 46 ring fragments with no sequence gap and produced one 107-second
+canonical artifact. The production conversation contained the before,
+process-down, and recovered markers in order. The remaining negative first
+segment offset is a backend projection-origin defect, not firmware loss.
+
+These are targeted reliability passes, not release qualification. The next
+gates are an overnight unplugged battery run, a user-authorized large backlog
+benchmark, a foreground/background/locked-screen matrix on both phones, and a
+wired fault-injection run once the JTAG adapter cable is available. The backend
+must also implement the app's existing `transcript_mode=replace` request
+atomically. Production currently appends the recovered canonical transcript to
+the original live segments, so audio durability passes while final transcript
+deduplication remains blocked outside this firmware/app branch.

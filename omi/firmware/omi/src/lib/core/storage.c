@@ -413,7 +413,14 @@ static int send_ring_info_response(struct bt_conn *conn)
     storage_status_cache_set(&info);
 
 #ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
-    blackbox_record(BLACKBOX_EVENT_SYNC_INFO, (int32_t) info.read_seq, (int32_t) (info.write_seq - info.read_seq));
+    /*
+     * INFO is the live-tail poll, not a state transition. Keep the exact
+     * request count in BLACKBOX_COUNTER_SYNC_INFO, but sample its trace event
+     * so a healthy connection cannot evict the disconnect/fault history that
+     * this internal recorder exists to preserve.
+     */
+    blackbox_record_rate_limited(
+        BLACKBOX_EVENT_SYNC_INFO, (int32_t) info.read_seq, (int32_t) (info.write_seq - info.read_seq), 300000U);
 #endif
 
     uint8_t response[31];
@@ -661,7 +668,7 @@ static uint8_t parse_storage_command(void *buf, uint16_t len)
 #ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
         blackbox_counter_add(BLACKBOX_COUNTER_SYNC_READ, 1U);
         blackbox_record_rate_limited(
-            BLACKBOX_EVENT_SYNC_READ, (int32_t) pending_start_seq, (int32_t) pending_packet_count, 5000U);
+            BLACKBOX_EVENT_SYNC_READ, (int32_t) pending_start_seq, (int32_t) pending_packet_count, 300000U);
 #endif
         read_request_pending = 1;
         return STORAGE_DEFERRED;
@@ -850,7 +857,7 @@ static void storage_write(void)
                     if (err == 0) {
                         blackbox_counter_add(BLACKBOX_COUNTER_SYNC_DONE, 1U);
                         blackbox_record_rate_limited(
-                            BLACKBOX_EVENT_SYNC_DONE, transfer_end_status, (int32_t) current_read_seq, 5000U);
+                            BLACKBOX_EVENT_SYNC_DONE, transfer_end_status, (int32_t) current_read_seq, 300000U);
                     } else {
                         blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
                         blackbox_record_rate_limited(BLACKBOX_EVENT_SYNC_ERROR, NOTIFY_DONE, err, 1000U);
