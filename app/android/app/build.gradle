@@ -65,8 +65,8 @@ android {
         }
         dev {
             dimension "flavor-type"
-            applicationId "com.friend.ios.dev"
-            resValue "string", "app_name", "Omi Dev"
+            applicationId "com.friend.ios.dev.blackbox"
+            resValue "string", "app_name", "Omi Blackbox"
         }
     }
 
@@ -145,6 +145,10 @@ android {
         debug{
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             minifyEnabled true
+            firebaseCrashlytics {
+                // Physical dev builds are local artifacts; never block them on a symbols upload.
+                mappingFileUploadEnabled false
+            }
         }
     }
 

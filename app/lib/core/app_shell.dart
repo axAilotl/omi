@@ -11,6 +11,8 @@ import 'package:omi/mobile/mobile_app.dart';
 import 'package:omi/pages/action_items/widgets/accept_shared_tasks_sheet.dart';
 import 'package:omi/pages/apps/app_detail/app_detail.dart';
 import 'package:omi/pages/settings/asana_settings_page.dart';
+import 'package:omi/pages/settings/blackbox_dfu_harness.dart';
+import 'package:omi/pages/settings/blackbox_export_harness.dart';
 import 'package:omi/pages/settings/clickup_settings_page.dart';
 import 'package:omi/pages/settings/usage_page.dart';
 import 'package:omi/pages/settings/wrapped_2025_page.dart';
@@ -44,6 +46,12 @@ class AppShell extends StatefulWidget {
 class _AppShellState extends State<AppShell> {
   late AppLinks _appLinks;
   StreamSubscription<Uri>? _linkSubscription;
+  final BlackboxDfuLaunchGate _blackboxDfuLaunchGate = BlackboxDfuLaunchGate(
+    enabled: blackboxDfuHarnessEnabled,
+  );
+  final BlackboxExportLaunchGate _blackboxExportLaunchGate = BlackboxExportLaunchGate(
+    enabled: blackboxDfuHarnessEnabled,
+  );
   Future<void> initDeepLinks() async {
     _appLinks = AppLinks();
 
@@ -67,7 +75,15 @@ class _AppShellState extends State<AppShell> {
       return;
     }
 
-    if (uri.pathSegments.first == 'apps' && uri.pathSegments.length > 1) {
+    if (_blackboxDfuLaunchGate.claim(uri)) {
+      if (mounted) {
+        Navigator.of(context).push(MaterialPageRoute(builder: (context) => const BlackboxDfuHarnessPage()));
+      }
+    } else if (_blackboxExportLaunchGate.claim(uri)) {
+      if (mounted) {
+        Navigator.of(context).push(MaterialPageRoute(builder: (context) => const BlackboxExportHarnessPage()));
+      }
+    } else if (uri.pathSegments.first == 'apps' && uri.pathSegments.length > 1) {
       if (mounted) {
         var app = await context.read<AppProvider>().getAppFromId(uri.pathSegments[1]);
         if (app != null) {

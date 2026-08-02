@@ -13,6 +13,9 @@ import 'package:share_plus/share_plus.dart';
 import 'package:omi/gen/pigeon_communicator.g.dart';
 import 'package:omi/providers/device_provider.dart';
 import 'package:omi/services/bridges/ble_bridge.dart';
+import 'package:omi/services/devices/blackbox_diagnostics_client.dart';
+import 'package:omi/services/devices/blackbox_protocol.dart';
+import 'package:omi/services/services.dart';
 import 'package:omi/utils/l10n_extensions.dart';
 
 class DeviceDiagnostics extends StatefulWidget {
@@ -32,6 +35,9 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
   bool _batteryDayView = true;
 
   BleDeviceDiagnostics? _diagnostics;
+  BlackboxDiagnosticsClient? _blackboxClient;
+  BlackboxSnapshot? _blackboxSnapshot;
+  bool _blackboxBusy = false;
   bool _isLoading = true;
   final _bleHostApi = BleHostApi();
 
@@ -50,9 +56,34 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
   }
 
   Future<void> _loadAll() async {
-    await Future.wait([_loadDiagnostics(), _loadBatteryHistory()]);
+    await Future.wait([_loadDiagnostics(), _loadBatteryHistory(), _loadBlackboxSnapshot()]);
     if (mounted) {
       setState(() => _isLoading = false);
+    }
+  }
+
+  Future<void> _loadBlackboxSnapshot() async {
+    final connection = await ServiceManager.instance().device.ensureConnection(widget.deviceId);
+    if (connection == null) return;
+    final client = BlackboxDiagnosticsClient(connection);
+    final snapshot = await client.snapshot();
+    if (!mounted || snapshot == null) return;
+    setState(() {
+      _blackboxClient = client;
+      _blackboxSnapshot = snapshot;
+    });
+  }
+
+  Future<void> _runBlackboxCommand(Future<bool> Function(BlackboxDiagnosticsClient client) command) async {
+    final client = _blackboxClient;
+    if (client == null || _blackboxBusy) return;
+    setState(() => _blackboxBusy = true);
+    try {
+      await command(client);
+      final snapshot = await client.snapshot();
+      if (mounted && snapshot != null) setState(() => _blackboxSnapshot = snapshot);
+    } finally {
+      if (mounted) setState(() => _blackboxBusy = false);
     }
   }
 
@@ -88,9 +119,33 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
 
   Future<void> _exportDiagnostics() async {
     final deviceProvider = context.read<DeviceProvider>();
+    BlackboxSnapshot? blackboxSnapshot = _blackboxSnapshot;
+    List<BlackboxEvent> blackboxEvents = const [];
+    String? blackboxExportError;
+    Map<String, Object?>? ringStatus;
+    final blackboxClient = _blackboxClient;
+    if (blackboxClient != null) {
+      try {
+        blackboxSnapshot = await blackboxClient.snapshot() ?? blackboxSnapshot;
+        blackboxEvents = await blackboxClient.readAllEvents();
+        final status = await blackboxClient.connection.getRingStatus();
+        if (status != null) {
+          ringStatus = {
+            'used_bytes': status.usedBytes,
+            'unread_packets': status.unreadPackets,
+            'free_bytes': status.freeBytes,
+            'rtc_valid': status.rtcValid,
+          };
+        }
+      } catch (error) {
+        blackboxExportError = error.toString();
+      }
+    }
     final data = {
       'device_id': widget.deviceId,
       'exported_at': DateTime.now().toUtc().toIso8601String(),
+      'collector_platform': Platform.operatingSystem,
+      'collector_os_version': Platform.operatingSystemVersion,
       'firmware': deviceProvider.connectedDevice?.firmwareRevision ?? 'unknown',
       'battery': deviceProvider.batteryLevel,
       'connected_at': _diagnostics?.connectedAt ?? 0,
@@ -114,6 +169,10 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
             },
           )
           .toList(),
+      'pendant_blackbox': blackboxSnapshot?.toJson(),
+      'pendant_blackbox_events': blackboxEvents.map((event) => event.toJson()).toList(),
+      'pendant_blackbox_export_error': blackboxExportError,
+      'pendant_ring_status': ringStatus,
     };
 
     final json = const JsonEncoder.withIndent('  ').convert(data);
@@ -198,6 +257,7 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
                 children: [
                   _buildStatusCards(),
                   const SizedBox(height: 24),
+                  if (_blackboxSnapshot != null) ...[_buildBlackboxSection(), const SizedBox(height: 24)],
                   _buildRssiChart(),
                   const SizedBox(height: 24),
                   _buildBatteryChart(),
@@ -207,6 +267,90 @@ class _DeviceDiagnosticsState extends State<DeviceDiagnostics> {
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildBlackboxSection() {
+    final snapshot = _blackboxSnapshot!;
+    final queueFull = snapshot.counters['audio_queue_full'] ?? 0;
+    final dropped = snapshot.counters['frame_dropped'] ?? 0;
+    final notifyErrors = (snapshot.counters['audio_notify_enomem'] ?? 0) +
+        (snapshot.counters['audio_notify_eagain'] ?? 0) +
+        (snapshot.counters['audio_notify_ebusy'] ?? 0) +
+        (snapshot.counters['audio_notify_enotconn'] ?? 0) +
+        (snapshot.counters['audio_notify_other_error'] ?? 0);
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          context.l10n.debugAndDiagnostics,
+          style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(16),
+          decoration: BoxDecoration(color: const Color(0xFF1C1C1E), borderRadius: BorderRadius.circular(16)),
+          child: Column(
+            children: [
+              _blackboxMetric('OBBX v1', snapshot.traceEnabled ? 'REC' : 'STOP'),
+              _blackboxMetric('MTU / PHY', '${snapshot.mtu} / ${snapshot.txPhy}:${snapshot.rxPhy}'),
+              _blackboxMetric('BLE interval', '${snapshot.connectionIntervalMs.toStringAsFixed(2)} ms'),
+              _blackboxMetric('Trace', '${snapshot.traceEventCount} / +${snapshot.traceOverwrittenEvents}'),
+              _blackboxMetric('TX errors', '$notifyErrors'),
+              _blackboxMetric('Queue full / drop', '$queueFull / $dropped'),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextButton(
+                      key: const ValueKey('blackbox_start_trace'),
+                      onPressed: _blackboxBusy
+                          ? null
+                          : () => _runBlackboxCommand((client) => client.startTrace(ttl: const Duration(hours: 12))),
+                      child: Text(context.l10n.start),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextButton(
+                      key: const ValueKey('blackbox_stop_trace'),
+                      onPressed: _blackboxBusy ? null : () => _runBlackboxCommand((client) => client.stopTrace()),
+                      child: Text(context.l10n.stop),
+                    ),
+                  ),
+                  Expanded(
+                    child: TextButton(
+                      key: const ValueKey('blackbox_clear_trace'),
+                      onPressed: _blackboxBusy ? null : () => _runBlackboxCommand((client) => client.clearTrace()),
+                      child: Text(context.l10n.clear),
+                    ),
+                  ),
+                  IconButton(
+                    key: const ValueKey('blackbox_refresh'),
+                    onPressed: _blackboxBusy ? null : _loadBlackboxSnapshot,
+                    icon: const Icon(Icons.refresh, color: Colors.white),
+                    tooltip: context.l10n.refresh,
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _blackboxMetric(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          Expanded(
+            child: Text(label, style: TextStyle(color: Colors.grey.shade400, fontSize: 13)),
+          ),
+          Text(value, style: const TextStyle(color: Colors.white, fontSize: 13)),
+        ],
+      ),
     );
   }
 
