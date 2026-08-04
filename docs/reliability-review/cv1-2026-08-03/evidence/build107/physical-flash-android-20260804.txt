@@ -1,0 +1,38 @@
+Build 107 Android physical flash evidence (sanitized)
+Device: paired Omi CV1 ending 0B:95
+Phone: Galaxy S25+, Android black-box package com.friend.ios.dev.blackbox
+Date: 2026-08-04 EDT
+
+01:43:49  Normal GATT connected; services discovered; exact paired device.
+01:44:03  DFU lease released the normal app connection.
+01:44:05  DFU read image 0 as 264388 bytes and image 1 as 175092 bytes.
+01:44:06  Preflight MCUboot list:
+           image 0 slot 0 version 3.0.30.106, active=true,
+           confirmed=true, pending=false.
+01:45:45  Upload complete. MCUboot list contained:
+           image 0 slot 1 version 3.0.30.107, bootable=true.
+01:45:46  Build 107 marked pending=true, permanent=true.
+01:45:46  Reset command acknowledged.
+01:45:47  Expected reboot disconnect (GATT status 8).
+01:45:47-01:46:19
+           Three exact-device reclaim attempts timed out with status 147.
+01:46:19  Bounded Dart reclaim exhausted and retained the exact-device lease.
+01:46:21, 01:46:31, 01:46:41
+           Android Nearby cycles reported no BLE Fast/GATT advertisements.
+01:47:10-01:47:19
+           Android Bluetooth controller was disabled and enabled to rule out a
+           stale host state.
+01:47:26-01:47:36
+           Fresh process/direct-connect attempt again timed out with status 147.
+
+The DFU harness UI reported Firmware installed because upload, confirm, and
+reset commands completed. That UI state is not postboot proof. No postboot
+MCUboot list, DIS version, GATT connection, or moving RingInfo has been
+captured. Build 107 therefore failed the no-touch post-DFU reconnect gate and
+must not be described as physically qualified.
+
+Next discriminating step: perform the documented charger/button MCU reset,
+then capture exact-device reconnect and the postboot active/confirmed image
+list. If it returns, this is physical evidence for the independent initial-boot
+advertising gap identified as R1 in the Kimi review; it is not evidence that
+the repaired button connection-reference leak recurred.

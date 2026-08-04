@@ -1,0 +1,2 @@
+6406b8b587e519f9f45b3cdb8f0e3401d977c444e21c0506b7d4efa19c0e36ac  /mnt/ai/omi-cv1-build107/inspect/omi.signed.bin
+0a9eee461fdb5b5179000554fa9ae4058c55a88f20fda52ed11a6620ad8e8f3b  /mnt/ai/omi-cv1-build107/inspect/ipc_radio.bin
