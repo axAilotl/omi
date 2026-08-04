@@ -5,7 +5,9 @@
 
 #include "../../src/lib/core/aad_hold_policy.h"
 #include "../../src/lib/core/audio_storage_packer.h"
+#include "../../src/lib/core/button_hold_policy.h"
 #include "../../src/lib/core/codec_input_capacity.h"
+#include "../../src/lib/core/mic_read_recovery.h"
 #include "../../src/lib/core/ring_transfer_integrity.h"
 #include "../../src/lib/core/rtc_elapsed_recovery.h"
 #include "../../src/lib/core/rtc_time_state.h"
@@ -131,8 +133,9 @@ static void test_storage_command_readiness_is_bounded_and_terminal_aware(void)
     assert(storage_readiness_decide(false, false, false, true, false) == STORAGE_READINESS_WAIT);
     assert(storage_readiness_decide(false, false, false, true, true) == STORAGE_READINESS_RETRYABLE_TIMEOUT);
 
-    /* A mounted card must still wait until the pusher commits its partial tail. */
-    assert(storage_readiness_decide(true, false, false, true, false) == STORAGE_READINESS_WAIT);
+    /* A mounted card serves its durable prefix while the partial tail commits. */
+    assert(storage_readiness_decide(true, false, false, false, false) == STORAGE_READINESS_SERVE_DURABLE_PREFIX);
+    assert(storage_readiness_decide(true, false, false, true, false) == STORAGE_READINESS_SERVE_DURABLE_PREFIX);
     assert(storage_readiness_decide(true, true, false, true, false) == STORAGE_READINESS_SERVE);
 
     /* Permanent media failure is explicit; it never enters the retry loop. */
@@ -768,6 +771,17 @@ static void test_connect_snapshot_flushes_existing_tail_after_queued_frames(void
     assert_packed_frame(writer.records[0], 0U, existing_tail, sizeof(existing_tail));
     assert_packed_frame(
         writer.records[0], sizeof(existing_tail) + 1U, queued_before_connect, sizeof(queued_before_connect));
+}
+
+static void test_latched_ring_transfer_does_not_recommit_live_producer_queue(void)
+{
+    assert(ring_transfer_read_requires_snapshot_commit(false));
+    assert(!ring_transfer_read_requires_snapshot_commit(true));
+    assert(ring_transfer_info_requires_snapshot_commit(false));
+    assert(!ring_transfer_info_requires_snapshot_commit(true));
+    assert(ring_transfer_read_should_flush_dirty_tail(false, false));
+    assert(!ring_transfer_read_should_flush_dirty_tail(true, false));
+    assert(!ring_transfer_read_should_flush_dirty_tail(false, true));
 }
 
 static void test_dirty_batch_retries_after_media_recovers_without_ble_command(void)
@@ -1432,6 +1446,27 @@ static void test_snapshot_commit_retries_until_success_or_disconnect(void)
     assert(!ring_snapshot_retry_required(false, false));
 }
 
+static void test_snapshot_readiness_is_monotonic_within_connection(void)
+{
+    bool ready = false;
+
+    /* The first failed commit leaves INFO/READ gated while retrying. */
+    ready = ring_snapshot_ready_next(ready, false);
+    assert(!ready);
+
+    /* The first successful commit publishes a readable durable window. */
+    ready = ring_snapshot_ready_next(ready, true);
+    assert(ready);
+
+    /* A later partial-tail failure cannot revoke that published window. */
+    ready = ring_snapshot_ready_next(ready, false);
+    assert(ready);
+
+    /* Production clears the latch explicitly when the connection ends. */
+    ready = false;
+    assert(!ready);
+}
+
 static void test_power_on_queue_failure_reconciles_until_mount_or_newer_off(void)
 {
     assert(ring_power_on_reconcile_required(true, false, -ENOMEM));
@@ -1627,6 +1662,42 @@ static void test_codec_pcm_capacity_guard(void)
     assert(codec_pcm_frame_fits(3200U, 1600U));
 }
 
+static void test_mic_read_timeout_restarts_idempotently_without_fighting_pause(void)
+{
+    assert(mic_read_recovery_action(-EAGAIN, false) == MIC_READ_RECOVERY_START);
+    assert(mic_read_recovery_action(0, false) == MIC_READ_RECOVERY_NONE);
+    assert(mic_read_recovery_action(-EIO, false) == MIC_READ_RECOVERY_NONE);
+    assert(mic_read_recovery_action(-EAGAIN, true) == MIC_READ_RECOVERY_NONE);
+}
+
+static void test_button_hold_graceful_shutdown_then_emergency_reboot(void)
+{
+    button_hold_policy_t policy;
+    button_hold_policy_init(&policy);
+
+    assert(button_hold_policy_update(&policy, false, 900) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 1000) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 3999) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 4000) == BUTTON_HOLD_ACTION_GRACEFUL_SHUTDOWN);
+    assert(button_hold_policy_update(&policy, true, 4001) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 30999) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 31000) == BUTTON_HOLD_ACTION_EMERGENCY_REBOOT);
+    assert(button_hold_policy_update(&policy, true, 32000) == BUTTON_HOLD_ACTION_NONE);
+}
+
+static void test_button_hold_release_rearms_and_clock_regression_is_safe(void)
+{
+    button_hold_policy_t policy;
+    button_hold_policy_init(&policy);
+
+    assert(button_hold_policy_update(&policy, true, 10000) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 9000) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 13000) == BUTTON_HOLD_ACTION_GRACEFUL_SHUTDOWN);
+    assert(button_hold_policy_update(&policy, false, 14000) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 20000) == BUTTON_HOLD_ACTION_NONE);
+    assert(button_hold_policy_update(&policy, true, 23000) == BUTTON_HOLD_ACTION_GRACEFUL_SHUTDOWN);
+}
+
 int main(void)
 {
     test_storage_command_readiness_is_bounded_and_terminal_aware();
@@ -1649,6 +1720,7 @@ int main(void)
     test_rtc_repeated_boot_and_live_sync_transitions_are_transactional();
     test_rtc_now_ms_clamps_and_saturates_boundaries();
     test_connect_snapshot_flushes_existing_tail_after_queued_frames();
+    test_latched_ring_transfer_does_not_recommit_live_producer_queue();
     test_dirty_batch_retries_after_media_recovers_without_ble_command();
     test_transient_sd_failure_retains_order_until_recovery();
     test_permanent_sd_failure_has_bounded_remounts_and_terminal_state();
@@ -1667,6 +1739,7 @@ int main(void)
     test_control_response_retries_transient_notify_backpressure();
     test_done_notification_stays_pending_until_enqueue_succeeds();
     test_snapshot_commit_retries_until_success_or_disconnect();
+    test_snapshot_readiness_is_monotonic_within_connection();
     test_power_on_queue_failure_reconciles_until_mount_or_newer_off();
     test_bulk_link_policy_avoids_range_boundary_parameter_churn();
     test_voice_gate_rejects_silence_and_isolated_noise();
@@ -1677,6 +1750,9 @@ int main(void)
     test_aad_hold_rejected_click_uses_idle_window();
     test_aad_hold_debounced_quiet_speech_uses_conversation_window();
     test_codec_pcm_capacity_guard();
+    test_mic_read_timeout_restarts_idempotently_without_fighting_pause();
+    test_button_hold_graceful_shutdown_then_emergency_reboot();
+    test_button_hold_release_rearms_and_clock_regression_is_safe();
     puts("audio_storage_packer_tests: PASS");
     return 0;
 }

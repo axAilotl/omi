@@ -1691,7 +1691,13 @@ void pusher(void)
          */
         if (flush_after_drain) {
             bool committed = flush_storage_tail_for_sync();
-            atomic_set(&storage_snapshot_ready, committed);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            if (!committed) {
+                blackbox_counter_add(BLACKBOX_COUNTER_SYNC_SNAPSHOT_COMMIT_FAILURE, 1U);
+            }
+#endif
+            bool snapshot_ready = atomic_get(&storage_snapshot_ready) != 0;
+            atomic_set(&storage_snapshot_ready, ring_snapshot_ready_next(snapshot_ready, committed));
             if (ring_snapshot_retry_required(storage_is_on, committed)) {
                 k_work_reschedule(&storage_snapshot_retry_work, K_MSEC(STORAGE_SNAPSHOT_RETRY_MS));
             }

@@ -77,6 +77,62 @@ The recommended way to update your device is through the Omi app's built-in OTA 
   </Accordion>
 </AccordionGroup>
 
+### Recover an unresponsive CV1
+
+The CV1 mainboard has a hardware-assisted MCU reset for cases where the device
+has power but is not advertising or responding to the app. This is a reboot,
+not a factory reset, and it does not intentionally erase stored recordings.
+
+<Steps>
+  <Step title="Remove the CV1 from its charger">
+    Start with the pendant completely off the magnetic charging puck.
+  </Step>
+  <Step title="Hold the center button">
+    Press and keep holding the pendant's center button.
+  </Step>
+  <Step title="Place it on the powered charger">
+    While the button is already held, place the CV1 on the powered magnetic
+    puck. Keep holding for about two seconds, then release.
+  </Step>
+  <Step title="Reconnect in the Omi app">
+    Allow the device to boot and reconnect. If it does not reconnect, toggle
+    Bluetooth in the app's phone and repeat the reset once.
+  </Step>
+</Steps>
+
+<Info>
+The two light sources visible beside the center switch are duplicate RGB LEDs
+wired to the same red, green, and blue signals. Both showing red is one device
+status, not two independent fault codes.
+</Info>
+
+<Warning>
+Do not short exposed test pads, bridge battery contacts, or pull the internal
+flex cable to reset the device. The charger-button sequence is the designed
+recovery path.
+</Warning>
+
+### Why an older CV1 may turn itself back on
+
+Historical CV1 firmware used the center button for both shutdown and wake. It
+could enter system-off while the active-low button was still held, after already
+arming that same level as the wake source. The remaining part of the shutdown
+press could therefore wake the device immediately and make it appear to reboot
+on its own. This was a firmware race, not evidence of two independent LED fault
+codes or necessarily a damaged device.
+
+Firmware containing the release fence waits until the physical button is no
+longer pressed before arming it as the system-off wake source. A different
+lookalike is also possible on storage-protecting builds: if pending audio cannot
+be committed safely, shutdown is cancelled and the device deliberately returns
+to operation rather than discarding the recording.
+
+On firmware versions with emergency button recovery, a normal 3-second hold
+requests a data-safe power-off; release after its feedback. If the device
+returns to red instead of staying off, hold continuously for 30 seconds to
+request a cold reboot. This does not replace the charger-button reset when the
+firmware itself is unresponsive.
+
 ---
 
 ## Open Source Hardware

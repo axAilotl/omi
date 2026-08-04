@@ -11,6 +11,7 @@ recovery, control-response retention, and RTC trust after reboot.
 | Frame packing | A rejected SD enqueue cannot consume, duplicate, or reorder the next Opus frame. The record keeps its first frame's capture timestamp across delayed flushes and reconnect. |
 | Storage-first capture | Live preview never precedes local ownership; temporary storage backpressure retains the exact frame and terminal SD failure alone permits live fallback. |
 | Awake capture and power observer | Every PCM frame captured while PDM is awake crosses the codec/storage callback regardless of amplitude. The adaptive observer learns ambient noise only to choose hardware-AAD power hold: rejected spikes retain the short idle window and only debounced activity promotes the conversation window. |
+| Microphone recovery | An nRF PDM `-EAGAIN` read stall idempotently re-triggers capture, while a cooperative pause never fights the recovery path. |
 | Transfer completion | CRC32-extended `DONE` bytes stay pinned, and transient notify backpressure retains the response. |
 | SD commit ordering | Payload, barrier, CRC/header, barrier, metadata, barrier execute in that order. |
 | SD fault matrix | Each of the six write/sync stages is fault-injected before a successful retry. |
@@ -19,6 +20,7 @@ recovery, control-response retention, and RTC trust after reboot.
 | Loss accounting | Wire `dropped_packets` counts only previously durable records made unreachable; a never-committed RAM tail remains diagnostics-only. |
 | RTC reboot validity | Repeated boots leave a persisted epoch invalid and records timestamp zero. Live phone sync establishes valid, increasing time; rejected updates are transactional and uptime/epoch arithmetic clamps or rejects its boundaries. |
 | RTC marker safety | The production elapsed-recovery seam consumes a one-shot marker before apply, rejects ordinary-reset provenance, fails closed for every IMU prerequisite, and rejects unbounded, wrap-ambiguous, or overflowing elapsed estimates. |
+| Button recovery | A 3-second hold requests graceful shutdown once, a continuous 30-second hold escalates to one cold reboot, release rearms both actions, and clock regression cannot manufacture a long hold. |
 | Debug black-box trace | Trace TTL expiry, ring overwrite accounting, stale-cursor reporting, and paged export preserve ordered event identity. |
 
 ## Run on the host

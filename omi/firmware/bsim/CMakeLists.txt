@@ -8,7 +8,9 @@ target_sources(app PRIVATE
     src/main.c
     src/stubs.c
     ${OMI_SOURCE_DIR}/settings.c
+    ${OMI_SOURCE_DIR}/lib/core/audio_storage_packer.c
     ${OMI_SOURCE_DIR}/lib/core/button_service.c
+    ${OMI_SOURCE_DIR}/lib/core/ring_transfer_integrity.c
     ${OMI_SOURCE_DIR}/lib/core/transport.c
 )
 

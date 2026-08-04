@@ -65,6 +65,7 @@ void button_notify(uint8_t event)
     final_button_state[0] = event;
     struct bt_conn *conn = get_current_connection();
     if (conn != NULL) {
-        bt_gatt_notify(conn, &button_service.attrs[1], &final_button_state, sizeof(final_button_state));
+        (void) bt_gatt_notify(conn, &button_service.attrs[1], &final_button_state, sizeof(final_button_state));
+        bt_conn_unref(conn);
     }
 }

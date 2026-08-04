@@ -22,7 +22,9 @@ source, and the phone is a resumable synchronization peer.
   exact sequence range, byte CRC, durable phone registration, then ADVANCE.
 
 The public-candidate demo reports firmware `3.0.29`. The isolated diagnostic
-line reports `3.0.30+101`, adds a 12-hour sampled trace and cumulative counters,
+line reports `3.0.30+106`, adds a 12-hour sampled trace, cumulative counters,
+an uptime-based emergency reboot, a button-release fence before system-off,
+and an advertising supervisor that remains active until a real connection,
 and is compiled into the `codex/cv1-blackbox-diagnostics` branch only. Neither
 line is a production release. Retain a hardware recovery path because an older
 OTA image may be rejected as a downgrade.
@@ -87,10 +89,21 @@ bundle identifiers, or signing settings from memory.
 
 ## Current physical evidence
 
-The diagnostic firmware has been flashed over the app DFU path and remained
-recoverable. A 12-hour firmware export reported no storage rejection, packet
-drop, microphone, notification, or sync error; two link-setup errors recovered
-and the final link negotiated 15 ms, MTU 498, 2M PHY, and DLE 251.
+Builds 101 and 102 of the diagnostic line were exercised over the app DFU path
+and remained recoverable. A 12-hour build-101 firmware export reported no
+storage rejection, packet drop, microphone, notification, or sync error; two
+link-setup errors recovered and the final link negotiated 15 ms, MTU 498, 2M
+PHY, and DLE 251.
+
+Builds 105 and 106 are **not** physically qualified. A later MCUmgr image-list
+audit proved the pendant's active, confirmed application core was still
+`3.0.30.102`. The supposed build-106 run had selected the build-102 ZIP from
+Flutter Documents while the correct build-106 artifact was staged in Android's
+native `files` directory. The updater skipped identical application image 0
+and refreshed only image 1. Any result previously attributed to build 105 or
+106 without a post-reboot active-image listing is invalidated. See
+`app/e2e/CV1_BLACKBOX_DEVICE_TESTING.md` for the corrected evidence and exact
+artifact hashes.
 
 On the Samsung Android fixture, a forced 23.6-second radio outage reconnected
 without app relaunch. The replacement tail read the current 25-record head in

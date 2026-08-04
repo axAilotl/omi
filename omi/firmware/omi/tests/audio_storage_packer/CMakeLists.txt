@@ -7,6 +7,8 @@ add_executable(audio_storage_packer_tests
     test_audio_storage_packer.c
     ../../src/lib/core/aad_hold_policy.c
     ../../src/lib/core/audio_storage_packer.c
+    ../../src/lib/core/mic_read_recovery.c
+    ../../src/lib/core/button_hold_policy.c
     ../../src/lib/core/ring_transfer_integrity.c
     ../../src/lib/core/rtc_elapsed_recovery.c
     ../../src/lib/core/rtc_time_state.c

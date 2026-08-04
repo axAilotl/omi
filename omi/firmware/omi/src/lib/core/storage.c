@@ -126,8 +126,8 @@ static uint8_t clear_ack_status;
 static uint8_t advance_ack_status;
 
 /* On connect the SD may still be remounting. Hold a sync request and wait up to
- * this long for the card to become ready, then read -- instead of replying
- * "not ready" (the app only triggers sync once, so it would give up). */
+ * this long for the media. A mounted card serves its durable prefix immediately
+ * even if the pusher's newest partial-tail flush is still pending. */
 #define STORAGE_SD_READY_TIMEOUT_MS 5000
 static int64_t info_deadline;
 static int64_t read_deadline;
@@ -219,7 +219,7 @@ static void storage_status_cache_refresh(void)
 {
     sd_ring_info_t info;
 
-    if (sd_ring_get_info(&info) == 0) {
+    if (sd_ring_get_durable_info(&info) == 0) {
         storage_status_cache_set(&info);
     }
 }
@@ -401,7 +401,7 @@ static int send_done(struct bt_conn *conn, uint8_t status, uint64_t next_seq)
 static int send_ring_info_response(struct bt_conn *conn)
 {
     sd_ring_info_t info;
-    int ret = sd_ring_get_info(&info);
+    int ret = sd_ring_get_durable_info(&info);
     if (ret < 0) {
 #ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
         blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
@@ -476,7 +476,7 @@ static int start_pending_read(struct bt_conn *conn)
 {
     ARG_UNUSED(conn);
     sd_ring_info_t info;
-    int ret = sd_ring_get_info(&info);
+    int ret = sd_ring_get_durable_info(&info);
     if (ret < 0) {
         return ret;
     }
@@ -559,8 +559,12 @@ static void write_to_gatt(struct bt_conn *conn)
         uint32_t packets_to_read = MIN(remaining_packets, (uint32_t) STORAGE_CHUNK_COUNT);
         uint32_t bytes_read = 0;
         uint32_t packets_read = 0;
-        int ret = sd_ring_read(
-            current_read_seq, storage_buffer, packets_to_read * RAW_AUDIO_PACKET_BYTES, &bytes_read, &packets_read);
+        int ret = sd_ring_read(current_read_seq,
+                               storage_buffer,
+                               packets_to_read * RAW_AUDIO_PACKET_BYTES,
+                               &bytes_read,
+                               &packets_read,
+                               true);
         if (ret < 0) {
 #ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
             blackbox_counter_add(BLACKBOX_COUNTER_SYNC_ERROR, 1U);
@@ -768,7 +772,12 @@ static void storage_write(void)
                         info_requested = 0;
                         info_deadline = 0;
                     }
-                } else if (action == STORAGE_READINESS_SERVE) {
+                } else if (action == STORAGE_READINESS_SERVE || action == STORAGE_READINESS_SERVE_DURABLE_PREFIX) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                    if (action == STORAGE_READINESS_SERVE_DURABLE_PREFIX) {
+                        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_SNAPSHOT_PREFIX_SERVED, 1U);
+                    }
+#endif
                     int ret = send_ring_info_response(conn);
                     if (ret == 0) {
                         info_requested = 0;
@@ -835,7 +844,12 @@ static void storage_write(void)
                         read_request_pending = 0;
                         read_deadline = 0;
                     }
-                } else if (action == STORAGE_READINESS_SERVE) {
+                } else if (action == STORAGE_READINESS_SERVE || action == STORAGE_READINESS_SERVE_DURABLE_PREFIX) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                    if (action == STORAGE_READINESS_SERVE_DURABLE_PREFIX) {
+                        blackbox_counter_add(BLACKBOX_COUNTER_SYNC_SNAPSHOT_PREFIX_SERVED, 1U);
+                    }
+#endif
                     int ret = start_pending_read(conn);
                     if (ret == 0 || send_ack(conn, storage_status_from_error(ret, STORAGE_NOT_READY)) == 0) {
                         read_request_pending = 0;

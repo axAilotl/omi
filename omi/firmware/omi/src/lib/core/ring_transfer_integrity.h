@@ -40,6 +40,35 @@ bool ring_control_response_should_retain(bool connected, int notify_error);
 
 bool ring_snapshot_retry_required(bool connection_active, bool commit_succeeded);
 
+/**
+ * Snapshot readiness is monotonic for one BLE connection. Once the pusher has
+ * published a durable readable window, a later failure to flush only the
+ * newest partial tail must not revoke access to the already-durable packets.
+ * The connection lifecycle explicitly clears the latch before the next
+ * session performs its initial commit.
+ */
+bool ring_snapshot_ready_next(bool snapshot_ready, bool commit_succeeded);
+
+/**
+ * A bounded transfer latches and commits its readable window before READ_BEGIN.
+ * Chunk reads inside that window must not re-drain a continuously producing
+ * audio queue, which can starve the SD worker until the caller times out.
+ */
+bool ring_transfer_read_requires_snapshot_commit(bool snapshot_latched);
+
+/**
+ * INFO for an already-latched transfer must report the existing durable
+ * window without draining a continuously producing write queue.
+ */
+bool ring_transfer_info_requires_snapshot_commit(bool snapshot_latched);
+
+/**
+ * Once a bounded transfer has latched its durable window, individual READ
+ * chunks must not flush the newer dirty tail. Terminal storage is read-only
+ * and likewise never attempts a flush.
+ */
+bool ring_transfer_read_should_flush_dirty_tail(bool snapshot_latched, bool storage_terminal);
+
 /** Temporary storage gaps retain the frame; terminal storage must let live processing continue. */
 bool ring_storage_frame_should_retain(bool storage_terminal);
 

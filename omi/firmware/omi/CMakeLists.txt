@@ -26,6 +26,8 @@ endif()
 file(GLOB core_sources
     src/lib/core/aad_hold_policy.c
     src/lib/core/audio_storage_packer.c
+    src/lib/core/button_hold_policy.c
+    src/lib/core/mic_read_recovery.c
     src/lib/core/config.h
     src/lib/core/codec.c
     src/lib/core/ring_transfer_integrity.c

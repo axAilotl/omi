@@ -6,7 +6,9 @@
 #include <zephyr/logging/log.h>
 #include <zephyr/pm/device_runtime.h>
 #include <zephyr/sys/poweroff.h>
+#include <zephyr/sys/reboot.h>
 
+#include "button_hold_policy.h"
 #include "codec.h"
 #include "haptic.h"
 #include "imu.h"
@@ -36,7 +38,6 @@ void check_button_level(struct k_work *work_item);
 
 K_WORK_DELAYABLE_DEFINE(button_work, check_button_level);
 
-#define DEFAULT_STATE 0
 #define SINGLE_TAP 1
 #define DOUBLE_TAP 2
 #define LONG_TAP 3
@@ -45,22 +46,6 @@ K_WORK_DELAYABLE_DEFINE(button_work, check_button_level);
 
 // 4 is button down, 5 is button up
 static FSM_STATE_T current_button_state = IDLE;
-static uint32_t inc_count_1 = 0;
-static uint32_t inc_count_0 = 0;
-
-const static int threshold = 10;
-
-static void reset_count()
-{
-    inc_count_0 = 0;
-    inc_count_1 = 0;
-}
-static inline void notify_press()
-{
-    LOG_INF("Button pressed");
-    button_notify(BUTTON_PRESS);
-}
-
 static inline void notify_unpress()
 {
     LOG_INF("Button released");
@@ -80,20 +65,11 @@ static inline void notify_double_tap()
     button_notify(DOUBLE_TAP);
 }
 
-static inline void notify_long_tap()
-{
-    // button press
-    LOG_INF("Button long tap");
-    button_notify(LONG_TAP);
-}
-
 #define BUTTON_PRESSED 1
 #define BUTTON_RELEASED 0
 
 #define TAP_THRESHOLD 300     // 300 ms for single tap
 #define DOUBLE_TAP_WINDOW 600 // 600 ms maximum for double-tap
-#define LONG_PRESS_TIME 3000  // 3000 ms for long press (power off)
-
 typedef enum {
     BUTTON_EVENT_NONE,
     BUTTON_EVENT_SINGLE_TAP,
@@ -107,8 +83,35 @@ static uint32_t btn_press_start_time;
 static uint32_t btn_release_time;
 static uint32_t btn_last_tap_time;
 static bool btn_is_pressed;
+static button_hold_policy_t hold_policy;
 
 static u_int8_t btn_last_event = BUTTON_EVENT_NONE;
+
+static void emergency_reboot(void)
+{
+    LOG_ERR("30-second emergency reset requested after graceful shutdown did not complete");
+    sys_reboot(SYS_REBOOT_COLD);
+}
+
+static void wait_for_button_release_before_system_off(void)
+{
+    bool logged_wait = false;
+
+    while (gpio_pin_get_dt(&usr_btn) > 0) {
+        if (!logged_wait) {
+            LOG_INF("Waiting for button release before arming the system-off wake source");
+            logged_wait = true;
+        }
+
+        button_hold_action_t action = button_hold_policy_update(&hold_policy, true, k_uptime_get());
+        if (action == BUTTON_HOLD_ACTION_EMERGENCY_REBOOT) {
+            emergency_reboot();
+        }
+        k_msleep(BUTTON_CHECK_INTERVAL);
+    }
+
+    button_hold_policy_update(&hold_policy, false, k_uptime_get());
+}
 
 void check_button_level(struct k_work *work_item)
 {
@@ -151,10 +154,7 @@ void check_button_level(struct k_work *work_item)
         }
     }
 
-    // Check for long press
-    if (btn_is_pressed && (current_time - btn_press_start_time) * BUTTON_CHECK_INTERVAL >= LONG_PRESS_TIME) {
-        event = BUTTON_EVENT_LONG_PRESS;
-    }
+    button_hold_action_t hold_action = button_hold_policy_update(&hold_policy, btn_is_pressed, k_uptime_get());
 
     // Single tap
     if (event == BUTTON_EVENT_SINGLE_TAP) {
@@ -172,10 +172,12 @@ void check_button_level(struct k_work *work_item)
     }
 
     // Long press, one time event
-    if (event == BUTTON_EVENT_LONG_PRESS && btn_last_event != BUTTON_EVENT_LONG_PRESS) {
+    if (hold_action == BUTTON_HOLD_ACTION_GRACEFUL_SHUTDOWN) {
         LOG_INF("long press detected\n");
-        btn_last_event = event;
+        btn_last_event = BUTTON_EVENT_LONG_PRESS;
         turnoff_all();
+    } else if (hold_action == BUTTON_HOLD_ACTION_EMERGENCY_REBOOT) {
+        emergency_reboot();
     }
 
     // Releases, one time event
@@ -195,7 +197,6 @@ void check_button_level(struct k_work *work_item)
     }
 
     k_work_reschedule(&button_work, K_MSEC(BUTTON_CHECK_INTERVAL));
-    return 0;
 }
 
 static struct gpio_callback button_cb_data;
@@ -236,6 +237,8 @@ int button_regist_callback()
 int button_init()
 {
     int ret;
+
+    button_hold_policy_init(&hold_policy);
 
     // Initialize the buttons device from evt
     if (!device_is_ready(buttons)) {
@@ -357,6 +360,14 @@ void turnoff_all()
         is_off = false;
         return;
     }
+
+    /*
+     * The user button is also the active system-off wake source. Arming its
+     * level interrupt while the long-press is still held wakes the device as
+     * soon as sys_poweroff() executes. Fence on physical release first. A
+     * continuously held button still reaches the emergency reboot deadline.
+     */
+    wait_for_button_release_before_system_off();
 
     // Put the buttons device to sleep if button is enabled
 #ifdef CONFIG_OMI_ENABLE_BUTTON

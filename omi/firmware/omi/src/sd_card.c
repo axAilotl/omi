@@ -152,6 +152,7 @@ typedef struct {
             uint32_t max_bytes;
             uint8_t *out_buf;
             struct read_resp *resp;
+            bool snapshot_latched;
         } read;
         struct {
             uint64_t new_read_seq;
@@ -159,6 +160,7 @@ typedef struct {
         } advance;
         struct {
             struct info_resp *resp;
+            bool snapshot_latched;
         } info;
         struct {
             struct status_resp *resp;
@@ -1663,7 +1665,7 @@ static int get_packet_name_for_seq(uint64_t seq, char *buf, size_t buf_size)
     uint8_t packet[RAW_AUDIO_PACKET_BYTES];
     uint32_t bytes_read = 0;
     uint32_t packets_read = 0;
-    int ret = sd_ring_read(seq, packet, sizeof(packet), &bytes_read, &packets_read);
+    int ret = sd_ring_read(seq, packet, sizeof(packet), &bytes_read, &packets_read, true);
     if (ret < 0 || packets_read == 0U) {
         return (ret < 0) ? ret : -ENOENT;
     }
@@ -1820,19 +1822,24 @@ void sd_worker_thread(void)
             break;
 
         case REQ_GET_RING_INFO:
-            /* Priority commands can overtake regular write requests. Drain
-             * accepted audio first so the returned snapshot includes the
-             * packer tail queued at BLE connect. */
             if (req.u.info.resp) {
-                int commit_res;
-                if (atomic_get(&storage_health) == SD_STORAGE_TERMINAL) {
+                bool terminal = atomic_get(&storage_health) == SD_STORAGE_TERMINAL;
+                int commit_res = 0;
+                if (!is_mounted) {
+                    commit_res = -ENODEV;
+                } else if (ring_transfer_info_requires_snapshot_commit(req.u.info.snapshot_latched) && terminal) {
                     commit_res = drain_pending_write_queue();
                     req.u.info.resp->info = ring_info_with_terminal_losses();
-                } else {
+                } else if (ring_transfer_info_requires_snapshot_commit(req.u.info.snapshot_latched)) {
                     commit_res = commit_pending_writes_for_snapshot();
                     if (commit_res == 0) {
                         req.u.info.resp->info = ring_state;
                     }
+                } else {
+                    /* The transfer owns only the already-durable prefix. New
+                     * writes may continue behind it without making INFO wait
+                     * for or mutate the dirty producer tail. */
+                    req.u.info.resp->info = ring_info_with_terminal_losses();
                 }
                 req.u.info.resp->res = commit_res;
                 k_sem_give(&req.u.info.resp->sem);
@@ -1842,17 +1849,21 @@ void sd_worker_thread(void)
 
         case REQ_READ_PACKETS:
             if (req.u.read.resp) {
-                int commit_res = atomic_get(&storage_health) == SD_STORAGE_TERMINAL
-                                     ? drain_pending_write_queue()
-                                     : commit_pending_writes_for_snapshot();
+                bool terminal = atomic_get(&storage_health) == SD_STORAGE_TERMINAL;
+                int commit_res = 0;
+                if (ring_transfer_read_requires_snapshot_commit(req.u.read.snapshot_latched)) {
+                    commit_res = terminal ? drain_pending_write_queue() : commit_pending_writes_for_snapshot();
+                }
                 bool terminal_read = atomic_get(&storage_health) == SD_STORAGE_TERMINAL;
+                bool flush_dirty_tail =
+                    ring_transfer_read_should_flush_dirty_tail(req.u.read.snapshot_latched, terminal_read);
                 req.u.read.resp->res = commit_res < 0 ? commit_res
                                                       : read_packets_internal(req.u.read.start_seq,
                                                                               req.u.read.out_buf,
                                                                               req.u.read.max_bytes,
                                                                               &req.u.read.resp->bytes_read,
                                                                               &req.u.read.resp->packets_read,
-                                                                              !terminal_read);
+                                                                              flush_dirty_tail);
                 k_sem_give(&req.u.read.resp->sem);
                 release_resp_busy(req.u.read.resp->busy_flag);
             }
@@ -2252,7 +2263,7 @@ uint32_t write_to_file_at_timestamp(const uint8_t *data, uint32_t length, uint32
     return length;
 }
 
-int sd_ring_get_info(sd_ring_info_t *info)
+static int sd_ring_get_info_internal(sd_ring_info_t *info, bool snapshot_latched)
 {
     if (!info) {
         return -EINVAL;
@@ -2271,6 +2282,7 @@ int sd_ring_get_info(sd_ring_info_t *info)
     sd_req_t req = {0};
     req.type = REQ_GET_RING_INFO;
     req.u.info.resp = &resp;
+    req.u.info.snapshot_latched = snapshot_latched;
 
     int ret = k_msgq_put(&sd_prio_msgq, &req, K_MSEC(500));
     if (ret != 0) {
@@ -2288,7 +2300,22 @@ int sd_ring_get_info(sd_ring_info_t *info)
     return resp.res;
 }
 
-int sd_ring_read(uint64_t start_seq, uint8_t *buf, uint32_t max_bytes, uint32_t *bytes_read, uint32_t *packets_read)
+int sd_ring_get_info(sd_ring_info_t *info)
+{
+    return sd_ring_get_info_internal(info, false);
+}
+
+int sd_ring_get_durable_info(sd_ring_info_t *info)
+{
+    return sd_ring_get_info_internal(info, true);
+}
+
+int sd_ring_read(uint64_t start_seq,
+                 uint8_t *buf,
+                 uint32_t max_bytes,
+                 uint32_t *bytes_read,
+                 uint32_t *packets_read,
+                 bool snapshot_latched)
 {
     if (!buf || !bytes_read || !packets_read) {
         return -EINVAL;
@@ -2312,6 +2339,7 @@ int sd_ring_read(uint64_t start_seq, uint8_t *buf, uint32_t max_bytes, uint32_t 
     req.u.read.max_bytes = max_bytes;
     req.u.read.out_buf = buf;
     req.u.read.resp = &resp;
+    req.u.read.snapshot_latched = snapshot_latched;
 
     int ret = k_msgq_put(&sd_prio_msgq, &req, K_MSEC(500));
     if (ret != 0) {
@@ -2573,7 +2601,7 @@ int read_audio_data(const char *filename, uint8_t *buf, int amount, int offset)
     while (total_read < amount && seq < info.write_seq) {
         uint32_t bytes_read = 0;
         uint32_t packets_read = 0;
-        ret = sd_ring_read(seq, compat_buffer, sizeof(compat_buffer), &bytes_read, &packets_read);
+        ret = sd_ring_read(seq, compat_buffer, sizeof(compat_buffer), &bytes_read, &packets_read, true);
         if (ret < 0) {
             return (total_read > 0) ? total_read : ret;
         }

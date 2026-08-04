@@ -10,8 +10,8 @@ storage_readiness_action_t storage_readiness_decide(bool media_ready,
         return STORAGE_READINESS_TERMINAL;
     }
 
-    if (media_ready && (snapshot_ready || storage_terminal)) {
-        return STORAGE_READINESS_SERVE;
+    if (media_ready) {
+        return snapshot_ready || storage_terminal ? STORAGE_READINESS_SERVE : STORAGE_READINESS_SERVE_DURABLE_PREFIX;
     }
 
     if (!deadline_started) {

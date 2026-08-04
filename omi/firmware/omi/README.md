@@ -16,7 +16,33 @@ Note: Open "firmware" folder in your code editor. Don't open the root omi folder
 
  <img width="986" alt="Screenshot 2025-04-20 at 12 48 49" src="https://github.com/user-attachments/assets/ccce238d-fa4b-4cbc-af7c-fc7688569b95" />
 
+## CV1 power and reset behavior
 
+- Historical CV1 firmware armed the active-low center button as a level-low
+  system-off wake source while the long shutdown press could still be held.
+  The same press could therefore wake the application core immediately after
+  `sys_poweroff()`. The release fence below closes that inherited race. No
+  matching public issue or regression test existed when it was reproduced.
+- Hold the center button for 3 seconds to request a graceful power-off. The
+  firmware preserves audio first and may cancel power-off if an SD/audio
+  durability gate cannot complete safely.
+- Release the button after the normal shutdown feedback. Firmware waits for
+  release before arming that same active-low button as the wake source, which
+  prevents an immediate wake from looking like the device turned itself on.
+- If graceful shutdown returns to a red state, start a new continuous
+  30-second hold to request a one-shot cold reboot. If the original hold is
+  still in progress, keep holding through 30 seconds. The emergency timer uses
+  system uptime, so time spent waiting for storage teardown does not restart it.
+- If firmware is not servicing the button, remove the pendant from the powered
+  magnetic charger, hold the center button, and place it back on the charger
+  while continuing to hold. Release after about 2 seconds. The mainboard force
+  reset circuit detects charger insertion while the button is already held.
+- The two RGB packages beside the center switch share the same three LED nets.
+  Seeing both emit the same color is expected and is not a two-code fault
+  indication.
+
+The charger-button action resets the MCU; it is not a factory reset. Do not
+short test pads, battery contacts, or the FPC connector as a substitute.
 
 ## WIP
 

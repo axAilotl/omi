@@ -18,6 +18,7 @@
 #include "lib/core/blackbox.h"
 #endif
 #include "lib/core/config.h"
+#include "lib/core/mic_read_recovery.h"
 #include "lib/core/settings.h"
 #include "lib/core/voice_activity_gate.h"
 #include "lib/core/voice_capture_policy.h"
@@ -58,6 +59,7 @@ K_MEM_SLAB_DEFINE_STATIC(mem_slab, MAX_BLOCK_SIZE, BLOCK_COUNT, 4);
 static const struct device *dmic_dev;
 static volatile mix_handler callback_func = NULL;
 static volatile bool mic_running = false;
+static atomic_t mic_recovery_pending = ATOMIC_INIT(0);
 
 /* Cooperative pause: mic_pause() asks the mic thread to stop cleanly between
  * reads and waits for it, so a dmic_read is never cut short (which would make
@@ -279,7 +281,26 @@ static void mic_thread_function(void *p1, void *p2, void *p3)
             blackbox_record_rate_limited(BLACKBOX_EVENT_MIC_READ_ERROR, ret, mic_running ? 1 : 0, 1000U);
 #endif
             LOG_ERR("Read failed: %d", ret);
+            if (mic_read_recovery_action(ret, atomic_get(&mic_stop_req) != 0) == MIC_READ_RECOVERY_START) {
+                int restart_ret = dmic_trigger(dmic_dev, DMIC_TRIGGER_START);
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+                blackbox_record_rate_limited(BLACKBOX_EVENT_MIC_RECOVERY, ret, restart_ret, 1000U);
+#endif
+                if (restart_ret < 0) {
+                    LOG_ERR("Microphone recovery START failed: %d", restart_ret);
+                } else {
+                    atomic_set(&mic_recovery_pending, 1);
+                    LOG_WRN("Microphone capture stalled; requested idempotent PDM restart");
+                }
+            }
             continue;
+        }
+
+        if (atomic_cas(&mic_recovery_pending, 1, 0)) {
+#ifdef CONFIG_OMI_ENABLE_BLACKBOX_DIAGNOSTICS
+            blackbox_record(BLACKBOX_EVENT_MIC_RECOVERY, 0, (int32_t) size);
+#endif
+            LOG_INF("Microphone capture recovered");
         }
 
         LOG_DBG("Got buffer %p of %u bytes", buffer, size);
@@ -383,6 +404,7 @@ int mic_start()
     }
 
     mic_running = true;
+    atomic_clear(&mic_recovery_pending);
     start_mic_thread();
 
 #ifdef CONFIG_OMI_ENABLE_T5838_AAD
@@ -440,6 +462,7 @@ void mic_resume()
 {
     LOG_INF("Resuming microphone");
     atomic_clear(&mic_stop_req);
+    atomic_clear(&mic_recovery_pending);
     if (!mic_running) {
 #ifdef CONFIG_OMI_ENABLE_VAD_GATE
         reset_voice_gate();

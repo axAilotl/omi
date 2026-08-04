@@ -17,6 +17,7 @@ static struct bt_uuid_128 button_uuid =
     BT_UUID_INIT_128(BT_UUID_128_ENCODE(0x23BA7925, 0x0000, 0x1000, 0x7450, 0x346EAC492E92));
 static struct bt_conn *connection;
 static struct k_sem operation;
+static struct k_sem disconnected_event;
 static uint16_t discovered_handle;
 static uint8_t read_value[8];
 static uint16_t read_length;
@@ -64,6 +65,7 @@ static void disconnected(struct bt_conn *conn, uint8_t reason)
         bt_conn_unref(connection);
         connection = NULL;
     }
+    k_sem_give(&disconnected_event);
 }
 
 BT_CONN_CB_DEFINE(connection_callbacks) = {
@@ -179,9 +181,21 @@ static int verify_contract(void)
     if (err) {
         return err;
     }
-    err = read_characteristic(discovered_handle);
-    if (err || read_length != 8 || read_value[0] != 0) {
-        return err ? err : -EINVAL;
+
+    uint16_t button_handle = discovered_handle;
+    bool button_event_observed = false;
+    for (int attempt = 0; attempt < 20; attempt++) {
+        err = read_characteristic(button_handle);
+        if (err) {
+            return err;
+        }
+        if (read_length == 8 && read_value[0] == 1) {
+            button_event_observed = true;
+            break;
+        }
+    }
+    if (!button_event_observed) {
+        return -EAGAIN;
     }
     err = verify_setting(&dim_uuid.uuid, 64, 64);
     if (err) {
@@ -190,9 +204,26 @@ static int verify_contract(void)
     return verify_setting(&gain_uuid.uuid, 9, 8);
 }
 
+static int connect_once(void)
+{
+    operation_error = 0;
+    int err = bt_le_scan_start(BT_LE_SCAN_ACTIVE, NULL);
+    if (err) {
+        return err;
+    }
+
+    err = k_sem_take(&operation, K_SECONDS(15));
+    if (err) {
+        (void) bt_le_scan_stop();
+        return err;
+    }
+    return operation_error;
+}
+
 int main(void)
 {
     k_sem_init(&operation, 0, 1);
+    k_sem_init(&disconnected_event, 0, 1);
     int err = bt_enable(NULL);
     if (err) {
         printk("OMI_BSIM_FAIL bt_enable %d\n", err);
@@ -203,16 +234,10 @@ int main(void)
         .recv = scan_received,
     };
     bt_le_scan_cb_register(&scan_callbacks);
-    err = bt_le_scan_start(BT_LE_SCAN_ACTIVE, NULL);
+    err = connect_once();
     if (err) {
-        printk("OMI_BSIM_FAIL scan %d\n", err);
+        printk("OMI_BSIM_FAIL first_connect %d\n", err);
         return err;
-    }
-
-    k_sem_take(&operation, K_FOREVER);
-    if (operation_error) {
-        printk("OMI_BSIM_FAIL connect %d\n", operation_error);
-        return operation_error;
     }
 
     err = verify_contract();
@@ -221,7 +246,26 @@ int main(void)
         return err;
     }
 
+    err = bt_conn_disconnect(connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    if (err) {
+        printk("OMI_BSIM_FAIL disconnect %d\n", err);
+        return err;
+    }
+    k_sem_take(&disconnected_event, K_FOREVER);
+
+    err = connect_once();
+    if (err) {
+        printk("OMI_BSIM_FAIL reconnect %d\n", err);
+        return err;
+    }
+
+    err = verify_contract();
+    if (err) {
+        printk("OMI_BSIM_FAIL reconnect_contract %d\n", err);
+        return err;
+    }
+
     printk("OMI_BSIM_PASS\n");
-    bt_conn_disconnect(connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
+    (void) bt_conn_disconnect(connection, BT_HCI_ERR_REMOTE_USER_TERM_CONN);
     return 0;
 }

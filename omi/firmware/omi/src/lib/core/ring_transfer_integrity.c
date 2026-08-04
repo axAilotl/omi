@@ -44,6 +44,26 @@ bool ring_snapshot_retry_required(bool connection_active, bool commit_succeeded)
     return connection_active && !commit_succeeded;
 }
 
+bool ring_snapshot_ready_next(bool snapshot_ready, bool commit_succeeded)
+{
+    return snapshot_ready || commit_succeeded;
+}
+
+bool ring_transfer_read_requires_snapshot_commit(bool snapshot_latched)
+{
+    return !snapshot_latched;
+}
+
+bool ring_transfer_info_requires_snapshot_commit(bool snapshot_latched)
+{
+    return !snapshot_latched;
+}
+
+bool ring_transfer_read_should_flush_dirty_tail(bool snapshot_latched, bool storage_terminal)
+{
+    return !snapshot_latched && !storage_terminal;
+}
+
 bool ring_storage_frame_should_retain(bool storage_terminal)
 {
     return !storage_terminal;
