@@ -42,6 +42,7 @@ if [[ "$(uname -s)" == "Darwin" ]] && flutter_bin="$(command -v flutter)"; then
     -target arm64-apple-ios15.0 \
     -F "$flutter_frameworks" \
     "$repo_root/app/ios/Runner/Ble/BleGattOperationScheduler.swift" \
+    "$repo_root/app/ios/Runner/Ble/BleKnownPeripheralConnectionPolicy.swift" \
     "$repo_root/app/ios/Runner/Ble/BleNotificationRouter.swift" \
     "$repo_root/app/ios/Runner/PigeonCommunicator.g.swift" \
     "$repo_root/app/ios/Runner/Ble/OmiBleManager.swift" \

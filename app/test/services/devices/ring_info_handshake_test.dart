@@ -115,4 +115,33 @@ void main() {
 
     expect(attempts, 3);
   });
+
+  test('default ring-info retry spans a slow SD remount window', () async {
+    var attempts = 0;
+    final delays = <Duration>[];
+    const policy = RingInfoRetryPolicy();
+
+    await expectLater(
+      policy.run(
+        () async {
+          attempts++;
+          throw const RingCommandRejectedException(
+            command: 'ring info',
+            status: RingProtocol.statusStorageNotReady,
+          );
+        },
+        wait: (delay) async => delays.add(delay),
+      ),
+      throwsA(isA<RingCommandRejectedException>()),
+    );
+
+    expect(attempts, 6);
+    expect(delays, const [
+      Duration(milliseconds: 500),
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+    ]);
+  });
 }

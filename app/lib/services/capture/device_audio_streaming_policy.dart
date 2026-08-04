@@ -15,4 +15,18 @@ abstract final class DeviceAudioStreamingPolicy {
     if (!usesStorageAuthoritativeAudio) return true;
     return transcribeLaterEnabled || transcriptionServiceReady;
   }
+
+  /// Starts the storage-authoritative tail without allowing a transient SD
+  /// readiness failure to abort the capture controller's recovery loop.
+  static Future<T?> startStorageTailRecoverably<T>({
+    required Future<T?> Function() start,
+    required void Function(Object error, StackTrace stackTrace) onFailure,
+  }) async {
+    try {
+      return await start();
+    } catch (error, stackTrace) {
+      onFailure(error, stackTrace);
+      return null;
+    }
+  }
 }

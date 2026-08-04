@@ -468,6 +468,20 @@ void main() {
       expect(deviceService.events, ['disconnect', 'release transport', 'reconnect:device-123:true']);
     });
 
+    test('explicit DFU target suspends the exact device before provider debounce catches up', () async {
+      provider.connectedDevice = null;
+
+      await provider.prepareDFUForDevice('device-native-owner');
+      await provider.resumeConnectionAfterDFU();
+
+      expect(deviceService.events, [
+        'disconnect',
+        'release transport',
+        'reconnect:device-native-owner:true',
+      ]);
+      expect(provider.isFirmwareUpdateInProgress, isFalse);
+    });
+
     test('a failed disconnect rolls the exact owner back and permits a later DFU', () async {
       deviceService.disconnectError = StateError('disconnect failed');
 

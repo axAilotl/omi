@@ -5,7 +5,15 @@ it is not a production or beta release procedure.
 
 ## Fixed identities and configuration
 
-- Firmware: `3.0.30+101`, built from the `3.0.29` storage-first/AAD policy lineage.
+- Firmware candidate: `3.0.30+110`, built from the `3.0.29`
+  storage-first/AAD-policy lineage. Build 110 retains the build-109 durable
+  prefix policy and removes the two lower-level SD flushes that build 109 still
+  performed from INFO and every latched READ chunk. A bounded transfer now
+  reads only its already-durable window while recording continues behind it.
+  It was built, sealed, flashed, and physically exercised on iPhone on
+  2026-08-04. The firmware durability/transfer gate passed; app/backend
+  conversation ownership across a true process death remains a separate
+  release blocker documented below.
 - Android black-box package: `com.friend.ios.dev.blackbox`. It is installed beside the authenticated `com.friend.ios.dev` app,
   whose signing key is not present locally; the original app and its recordings must remain untouched.
 - iOS test package: `com.omi.reliability.alexsmacbookpro`, team `6DV84DW2BA`. Updating this exact bundle preserves the signed-in app data and keychain access group.
@@ -60,6 +68,18 @@ signed_app="$(./e2e/scripts/build_signed_ios_physical_dev.sh)"
 xcrun devicectl device install app --device D019FCB0-B857-5C7B-95C7-D28071D0E113 "$signed_app"
 ```
 
+The helper defaults to a profile build. For Marionette/`agent-flutter` UI
+assertions on the physical iPhone, build the same preserved bundle as a debug
+artifact instead:
+
+```bash
+signed_app="$(OMI_IOS_BUILD_MODE=debug ./e2e/scripts/build_signed_ios_physical_dev.sh)"
+```
+
+Debug and profile use the same bundle identifier, signing identity, profile,
+Firebase project, and customer API. Installation is always an in-place update;
+do not uninstall the app to change build modes.
+
 The resulting app must have all of these properties before installation:
 
 ```text
@@ -74,11 +94,18 @@ bundle. Install the exact custom bundle in place. iOS may relaunch that custom
 bundle for CoreBluetooth restoration; when handing the pendant to Android,
 disable iPhone Bluetooth or terminate only the custom dev bundle.
 
-Known-good local shell/profile source:
+Known-good durable local profile source (expires 2027-07-25):
 
 ```text
-/private/tmp/omi-ios-storage-first-known-good-auth-20260729.o1Z4dQ/OmiDev-storage-first.app
+~/Downloads/omi-ios-personal-8c1321a908-20260725/OmiDev-personal-profile-signed.app
 ```
+
+Do not point the helper at a `/private/tmp` build artifact. Temporary app
+directories are cleanup-prone and caused a previously working authenticated
+build procedure to fail before compilation. The durable profile above has
+application identifier
+`6DV84DW2BA.com.omi.reliability.alexsmacbookpro`; the build helper verifies
+that identifier again after signing.
 
 Device identifiers:
 
@@ -90,9 +117,14 @@ CoreDevice ID: D019FCB0-B857-5C7B-95C7-D28071D0E113
 Use `xcrun devicectl device install app --device D019FCB0-B857-5C7B-95C7-D28071D0E113 <signed-app>` to update in place.
 Do not uninstall the existing custom bundle.
 
-For a locked-screen lab run, copy the fixed-name artifact into the app's Documents directory and launch the exact internal URL
-`omi://blackbox/dfu`. The route does not exist unless `OMI_BLACKBOX_HARNESS=true`, accepts no arbitrary path or device identifier,
-waits for the already-paired Omi CV1, and uses the same `prepareDFU()`/MCUmgr path as the visible developer screen.
+For a locked-screen lab run, copy
+`Omi_CV1_Blackbox_OTA_3.0.30_build110_SHA8ad0dad0.zip` into the app's Documents
+directory and launch the exact internal URL `omi://blackbox/dfu`. The route does
+not exist unless `OMI_BLACKBOX_HARNESS=true`, accepts no arbitrary path or
+device identifier, waits for the already-paired Omi CV1, and uses the same
+`prepareDFUForDevice()`/MCUmgr path as the visible developer screen. Before it
+touches BLE it verifies the exact filename, ZIP SHA-256, ZIP members, manifest,
+image sizes and hashes, and signed MCUboot application-header version.
 
 After the pendant reconnects, launch `omi://blackbox/export`. That exact opt-in
 route writes `omi-blackbox-export-latest.json` to the app Documents directory.
@@ -112,11 +144,47 @@ docker run --rm \
   bash /omi/firmware/scripts/ci/build-cv1.sh
 ```
 
-The OTA artifact is `omi/firmware/v2.9.0/build/dfu_application.zip`. Confirm firmware `3.0.30` after DFU before collecting data.
+The raw build output is `omi/firmware/v2.9.0/build/dfu_application.zip`, but do
+not stage or flash that generic filename. Copy it to the unique sealed filename
+and verify its hash first. Confirm DIS firmware `3.0.30`, MCUboot application
+`3.0.30.110`, and active/confirmed state after DFU before collecting data.
+The build-110 OTA is
+`Omi_CV1_Blackbox_OTA_3.0.30_build110_SHA8ad0dad0.zip`, SHA-256
+`8ad0dad061fe637b922d5ed6667a4ac0713ebbe9539fa03ab0744b45e0dcabec`.
+The manifest application image is 264,532 bytes with SHA-256
+`561ed42eb008440f840d0d3594b0d9cba4a516749511b0858aa8a80cc676bedf`;
+the network image is 175,092 bytes with SHA-256
+`39df96b86c94ed55dc06d282ca2d4b6c2b3103aa9f64456f8848d650d6dbe9c0`.
+
+Historical artifacts follow for incident reconstruction only; none may be
+substituted for build 110. Build 109 was
+`Omi_CV1_Blackbox_OTA_3.0.30_build109_SHAc818aa1c.zip`, SHA-256
+`c818aa1c1bf16bf0d55250c23aab50d9dd27be50795dbcb3e7c93d1c756e8568`.
+It flashed successfully and proved postboot advertising, exact-device iOS
+reclaim, live Tango transcription, zero frame drops, and durable-prefix entry.
+The process-restart test then recorded 15 prefix entries and 15 sync errors:
+the SD worker still drained/flushed the producer tail from INFO and latched
+READ, so build 109 failed continuous reconnect qualification. Build 107 was
+`Omi_CV1_Blackbox_OTA_3.0.30_build107_SHA052faa45.zip`, SHA-256
+`052faa4556c104b467ae60f38e7b76264bc7eb12ba3d3eebfb75eb971dffc4ef`;
+it failed the no-touch postboot reconnect gate and has no postboot
+active/confirmed proof.
 The artifact flashed for the 2026-08-01 physical run had SHA-256
 `38c8d25de638eda065b88d04e4be854ce1bdc07b491a199a4fa453ad1ff12393`.
 The fresh pinned-gate rebuild from the final source produced SHA-256
 `cbebda3e9fce626fe997b535fa76377f42a66d80d9d12e8048c74fc65057ebf8`.
+The superseded build 103 artifact containing microphone, bounded-read, and
+post-disconnect advertiser recovery fixes has SHA-256
+`f1536e940406adc39f8fdc39e1701b0d45a0ffb1b43323caf85d1094cfddf9a3`.
+The build 104 artifact that also recovers an initial advertising failure after
+application-core wake has SHA-256
+`b59a2e5aa21da85e67de19466e4c7af57b6fb762a781a3897062c80d43855bbc`.
+The build 105 artifact that adds the system-off release fence and 30-second
+emergency cold reboot has SHA-256
+`74719711fcdc7a750c03918d59a3566ebdc2a70a95568f5fc26e5611247f449d`.
+The build 106 artifact that supervises post-disconnect advertising until a real
+connection and records each reset result has SHA-256
+`0eec4835d53b0667fee71f1f9f40105a508cd3eeab8f60942d7e5707cd4cd209`.
 Record a new hash after every rebuild and never substitute one artifact's hash
 for another physical run's evidence.
 
@@ -150,6 +218,32 @@ available as discrete timeline events.
 Capture Android logs with `adb logcat` and iOS logs with `xcrun devicectl device process launch --console`. Record firmware version,
 phone OS, wall-clock start/end, initial/final battery, ring unread counts, live-preview recovery time, recording durations, and any
 server processing IDs. Never delete pendant or production recordings as part of this diagnostic flow.
+
+### Recover a powered but off-air CV1
+
+The mainboard has two RGB LED packages, D2 and D7, on the same three control
+nets. Both packages showing red is one disconnected/error color and does not
+identify two independent hardware faults.
+
+Use the hardware-assisted MCU reset before opening the device or waiting for
+the battery to drain:
+
+1. Remove the pendant from the powered magnetic charger.
+2. Hold the center user button.
+3. While the button is already held, place the pendant on the powered charger.
+4. Continue holding for about 2 seconds, then release and scan for advertising.
+
+The charger insertion edge and held button drive the mainboard force-reset
+circuit. It is not a storage erase or factory reset. Never short test pads,
+battery rails, or FPC pins; the FPC carries battery, reset, and SWD signals.
+
+Firmware on this branch also separates ordinary shutdown from recovery. Three
+seconds requests a durability-preserving power-off. The normal path waits for
+physical release before arming the button's active-low system-off wake source.
+If shutdown returns because audio/SD teardown failed, a continuous hold through
+30 seconds issues one cold reboot; begin a new hold if the original was already
+released. Release rearms the policy. If the software work queue itself cannot
+run, use the charger-button hardware reset above.
 
 ## 2026-08-01/02 black-box results
 
@@ -220,6 +314,48 @@ the earlier tests, including large historical recordings. That is a credible
 cause of the observed slow sync UI and large WAL-manifest work; this run did
 not delete user recordings or use container cleanup as a performance fix.
 
+### 2026-08-04 build-110 iPhone qualification
+
+The checksum-locked iOS harness displayed and flashed exactly
+`3.0.30+110` / ZIP `8ad0dad0` / app `561ed42e` / net `39df96b8`, completed
+both MCUboot images, and reported `Firmware installed`. A separately installed
+production iPhone app initially won CoreBluetooth ownership after the reboot;
+terminating only that competing process let the custom app own the pendant.
+The original post-DFU dev session did not retry after that ownership loss, so
+the custom app required one process restart. This is a dev/prod side-by-side
+ownership and bounded-retry defect, not evidence that build 110 stayed off-air.
+
+The clean dev-only run then proved:
+
+- battery and capture state republished as `100%` / `Listening`;
+- the pre-outage November marker appeared in live preview;
+- a true app-process-down Papa marker was retained by the pendant;
+- the relaunched app reclaimed the exact device without user pairing, and the
+  post-reconnect Quebec marker appeared in live preview;
+- no `Device storage is not ready` error occurred after the build-110
+  reconnect, unlike build 109.
+
+The final export at `2026-08-04T19:08:44Z` is stored locally at
+`/private/tmp/omi-blackbox-ios-build110-postclose3-20260804.json` (SHA-256
+`1a0948cf285eae4023922ceef81e56091fe2bfa53692861feabaaf81214b6236`).
+It reported a healthy SD card and 15 ms / MTU 498 / DLE 251 / 2M PHY. All
+27,375 audio frames were accepted by storage; storage rejection, frame drop,
+microphone read error, SD write rejection, link setup error, and sync error
+were all zero. The scheduler completed 132 READ/DONE pairs and durably moved
+2,553,000 bytes while capture continued. This is the physical proof that
+removing INFO/latched-READ producer-tail flushes fixed build 109's repeated
+storage-readiness failure.
+
+The same export also reproduces the remaining semantic blocker without data
+loss: exact ring source ranges are continuous across Papa, but the
+`19:01:30Z`–`19:03:29Z` app-down interval remains local, unbound `miss` WALs.
+Only the later `19:03:32Z`–`19:04:01Z` live owner became a canonical recording.
+The raw ranges were not uploaded independently and remain recoverable, but a
+transport/process death still became a backend conversation boundary. Do not
+claim one-conversation iOS recovery until ownership survives process death and
+the backend atomically replaces/merges the canonical transcript by source
+coverage.
+
 The final Android diagnostic export is stored locally at
 `/private/tmp/omi-blackbox-export-20260802.json` (SHA-256
 `163101a0104a9195170136bd4f60629cf79687149f464f9341bc77c1dac4c9e0`).
@@ -227,3 +363,72 @@ After 20 pendant connections and 2,853 ring reads it reported zero audio queue
 full, storage rejection, frame drop, microphone read, SD write rejection, SD
 health, sync, or diagnostics-busy errors. Two of 80 link-setup attempts failed
 and recovered. The final link remained 15 ms / MTU 498; battery was 93%.
+
+## 2026-08-03 recovery findings
+
+> **Evidence correction (23:16 run):** the run originally described below as
+> build 105/106 qualification did not install either application-core image.
+> The harness resolves its fixed ZIP from Flutter's Documents directory
+> (`app_flutter` on Android), while the build-106 ZIP had been staged in the
+> native Android `files` directory. The DFU log proves that the selected ZIP
+> was build 102: image 0 was 264,404 bytes with SHA-1
+> `3f1ca5b91e568fe74f2d42f8ce3e78a9574b358f`, exactly matching the retained
+> build-102 ZIP. MCUmgr listed active, confirmed application image
+> `3.0.30.102` both before and after the transfer. Image 0 was therefore
+> skipped as identical and only image 1 was refreshed. The build-105 and
+> build-106 observations below are retained as historical hypotheses, not
+> physical evidence. Neither build is physically qualified.
+
+Build 102 reproduced two false-ready states that the earlier acceptance run did
+not cover:
+
+- The UI remained connected/listening while the ring write sequence was frozen.
+  The pendant trace contained 743 consecutive `dmic_read(...)= -EAGAIN` errors.
+  On nRF PDM, exhausting the RX slab stops capture; build 104 issues an
+  idempotent start on `-EAGAIN` and records `mic_recovery` when the next block
+  arrives.
+- After recovery, the live tail completed several reads, then a 75-record read
+  delivered 72 records and returned status 9 after the 15-second SD-worker
+  timeout. The third chunk attempted to re-drain a write queue that live audio
+  continuously replenished. Bounded reads now reuse the durable snapshot
+  latched before `READ_BEGIN` instead of waiting for the producer to quiesce.
+- Force-stopping only the Dev app disconnected GATT, but the pendant did not
+  advertise again. The first recovery worker had accepted `-EALREADY` as proof
+  that the legacy advertiser was on air; an independent CoreBluetooth scan
+  found no Omi advertisement. Build 104 explicitly stopped and restarted that
+  advertiser, retried every failed start including `-EALREADY`, and also
+  entered recovery when the first advertising attempt after an application-core
+  wake failed.
+- A long-press appeared to power the pendant off, but the red disconnected LED
+  returned several seconds later. Shutdown deliberately restores operation
+  when its audio/SD durability gate cannot commit cleanly; treat that symptom
+  as a cancelled shutdown, not evidence that either nRF5340 core rebooted.
+- In the physical recovery incident, both RGB packages remained red and an
+  independent CoreBluetooth scan found no Omi advertisement. Holding the center
+  button before placing the pendant on its powered charger restored it. The
+  repository history confirms the legacy shutdown path could arm the still-held
+  active-low button as a wake source without a release fence; factory firmware
+  could therefore appear to turn itself back on as well. Repository issue search
+  found no pre-existing public bug report or regression test that named this
+  exact race; the behavior was established from the historical implementation
+  and the physical reproduction, not from an earlier tracked issue.
+
+The first two observations preserve the ring cursor: no ADVANCE was sent for
+the incomplete range. An export attributed at the time to build 105 showed
+1,312 audio frames, 1,310 storage accepts, a healthy SD ring, and zero
+queue-full, storage-reject, frame-drop, microphone, SD-write, or sync errors.
+Because no active-image proof accompanied that export and the later MCUmgr
+inspection still showed build 102, it cannot qualify build 105. After
+force-stopping Android, independent CoreBluetooth scans found no Omi
+advertisement for more than 60 seconds, including after an acoustic wake. That
+is valid evidence for the active build-102 baseline only.
+
+Build 106 source waits 1.5 seconds for Zephyr connection-object recycling,
+atomically tracks connection state, then refreshes the legacy advertiser at
+2/4/8/16/30-second capped intervals until a real connection callback cancels
+it. Every reset records `stop_err`/`start_err` in the black-box trace and
+increments `ble_advertising_recovery`. Physical qualification requires staging
+the exact ZIP in Flutter Documents, verifying its manifest and application
+header before DFU, and proving MCUmgr reports active image `3.0.30.106` after
+reboot. Only then may the no-touch independent-scan/reconnect test be used as
+build-106 evidence.

@@ -162,7 +162,7 @@ void main() {
       expect(find.byIcon(Icons.cloud_off), findsNothing);
     });
 
-    testWidgets('shows Listening during device recording when transcription is down', (tester) async {
+    testWidgets('shows reconnecting while device recording has no active audio stream', (tester) async {
       final captureProvider = CaptureProvider();
       addTearDown(captureProvider.dispose);
       // Set up a fake recording device to exercise the device recording path
@@ -175,11 +175,10 @@ void main() {
 
       final context = tester.element(find.byType(ConversationCaptureWidget));
       final listeningText = AppLocalizations.of(context).listening;
-      final reconnectText = AppLocalizations.of(context).transcriptionPaused;
+      final reconnectText = AppLocalizations.of(context).transcriptionReconnecting;
 
-      expect(find.text(listeningText), findsWidgets);
-      expect(find.text(reconnectText), findsNothing);
-      expect(find.byIcon(Icons.cloud_off), findsNothing);
+      expect(find.text(listeningText), findsNothing);
+      expect(find.text(reconnectText), findsWidgets);
     });
 
     testWidgets('shows reconnecting after an abnormal device live-socket close', (tester) async {
@@ -202,7 +201,7 @@ void main() {
       captureProvider.dispose();
     });
 
-    testWidgets('paused state overrides Listening during device recording', (tester) async {
+    testWidgets('paused state overrides audio-path recovery during device recording', (tester) async {
       final captureProvider = CaptureProvider();
       addTearDown(captureProvider.dispose);
       captureProvider.updateRecordingDevice(
@@ -213,11 +212,11 @@ void main() {
       await pumpCaptureWidget(tester, captureProvider);
 
       final context = tester.element(find.byType(ConversationCaptureWidget));
-      final listeningText = AppLocalizations.of(context).listening;
+      final reconnectingText = AppLocalizations.of(context).transcriptionReconnecting;
       final mutedText = AppLocalizations.of(context).muted;
 
-      // Initially should show Listening
-      expect(find.text(listeningText), findsWidgets);
+      // The fake device has no active audio stream, so readiness is honest.
+      expect(find.text(reconnectingText), findsWidgets);
 
       // Simulate device pause: set isPaused and change to pause state
       captureProvider.updateRecordingState(RecordingState.pause);
@@ -230,7 +229,7 @@ void main() {
       }
       await tester.pump();
 
-      // Muted/Paused should override Listening for device recording
+      // Muted/Paused should override recovery for device recording.
       expect(find.text(mutedText), findsWidgets);
     });
   });

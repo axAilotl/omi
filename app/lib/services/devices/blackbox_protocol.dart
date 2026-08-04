@@ -56,6 +56,9 @@ class BlackboxProtocol {
     'sync_bytes',
     'diagnostic_request',
     'diagnostic_busy',
+    'ble_advertising_recovery',
+    'sync_snapshot_prefix_served',
+    'sync_snapshot_commit_failure',
   ];
 
   static const List<String> eventNames = [
@@ -89,6 +92,8 @@ class BlackboxProtocol {
     'sync_error',
     'trace_started',
     'trace_stopped',
+    'mic_recovery',
+    'ble_advertising_recovery',
   ];
 
   static Uint8List startTraceCommand(Duration ttl) {

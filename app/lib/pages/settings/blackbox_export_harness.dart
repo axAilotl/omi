@@ -25,6 +25,16 @@ class BlackboxExportHarnessPolicy {
   static bool matches(Uri uri, {required bool enabled}) {
     return enabled && uri.scheme == 'omi' && uri.host == 'blackbox' && uri.path == '/export';
   }
+
+  /// Diagnostics must remain reachable when GATT is connected but the audio
+  /// path is unhealthy. Requiring audio readiness here makes the exporter
+  /// unavailable for the exact false-ready failures it exists to investigate.
+  static bool shouldAttemptTransport({
+    required bool hasConnectedDevice,
+    required bool audioPathReady,
+  }) {
+    return hasConnectedDevice;
+  }
 }
 
 class BlackboxExportLaunchGate {
@@ -61,12 +71,17 @@ class _BlackboxExportHarnessPageState extends State<BlackboxExportHarnessPage> {
     try {
       final provider = context.read<DeviceProvider>();
       for (var attempt = 0; attempt < 60 && mounted; attempt++) {
-        if (provider.isConnected && provider.connectedDevice != null) break;
+        if (provider.connectedDevice != null) break;
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
       if (!mounted) return;
       final device = provider.connectedDevice;
-      if (!provider.isConnected || device == null || device.type.name != 'omi') {
+      if (!BlackboxExportHarnessPolicy.shouldAttemptTransport(
+            hasConnectedDevice: device != null,
+            audioPathReady: provider.isConnected,
+          ) ||
+          device == null ||
+          device.type.name != 'omi') {
         throw StateError('The exact paired Omi CV1 did not connect within 30 seconds');
       }
 

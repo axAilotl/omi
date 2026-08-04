@@ -1075,10 +1075,15 @@ class DeviceProvider extends ChangeNotifier implements IDeviceServiceSubsciption
   void onStatusChanged(DeviceServiceStatus status) {}
 
   Future<void> prepareDFU() async {
-    if (!FirmwareUpdateBuildPolicy.current.allowsOmiFirmwareUpdate || connectedDevice == null) {
+    final deviceId = connectedDevice?.id;
+    if (deviceId == null) {
       return;
     }
-    final deviceId = connectedDevice!.id;
+    await prepareDFUForDevice(deviceId);
+  }
+
+  Future<void> prepareDFUForDevice(String deviceId) async {
+    if (!FirmwareUpdateBuildPolicy.current.allowsOmiFirmwareUpdate) return;
     setFirmwareUpdateInProgress(true);
     try {
       await _deviceService.suspendConnectionForDfu(deviceId);

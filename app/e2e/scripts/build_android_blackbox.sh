@@ -38,6 +38,7 @@ flutter build apk \
   --flavor dev \
   --target-platform android-arm64 \
   -t lib/main.dart \
+  --android-project-arg=omiBlackboxPackage=true \
   --dart-define=OMI_BLACKBOX_HARNESS=true >&2
 
 APK="${APP_DIR}/build/app/outputs/flutter-apk/app-dev-debug.apk"
