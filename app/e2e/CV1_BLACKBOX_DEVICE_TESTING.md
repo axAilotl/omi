@@ -336,7 +336,7 @@ The clean dev-only run then proved:
   reconnect, unlike build 109.
 
 The final export at `2026-08-04T19:08:44Z` is stored locally at
-`/private/tmp/omi-blackbox-ios-build110-postclose3-20260804.json` (SHA-256
+`/Users/cgic/Omi-CV1-Reliability-Work/evidence/build110-ios/omi-blackbox-ios-build110-postclose3-20260804.json` (SHA-256
 `1a0948cf285eae4023922ceef81e56091fe2bfa53692861feabaaf81214b6236`).
 It reported a healthy SD card and 15 ms / MTU 498 / DLE 251 / 2M PHY. All
 27,375 audio frames were accepted by storage; storage rejection, frame drop,

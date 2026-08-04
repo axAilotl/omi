@@ -2,9 +2,11 @@
 
 ## Repository state
 
-- Primary experimental worktree: `/private/tmp/omi-cv1-blackbox`
+- Primary experimental worktree:
+  `/Users/cgic/Omi-CV1-Reliability-Work/worktrees/cv1-blackbox-diagnostics`
 - Branch: `codex/cv1-blackbox-diagnostics`
-- Recorded HEAD before this packet: `ef4c9355b3`
+- Preserved review-packet head before the permanent-home migration:
+  `de29fcc7ad`
 - Upstream comparison: `origin/main`
 - Draft PR under discussion: BasedHardware/omi #10654
 

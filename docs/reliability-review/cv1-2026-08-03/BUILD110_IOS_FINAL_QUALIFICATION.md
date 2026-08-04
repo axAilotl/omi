@@ -22,6 +22,8 @@ that cold-launch-to-first-text latency is five seconds.
   `OmiBlackbox-build110-composite-debug.ipa`
 - Composite IPA SHA-256:
   `2ddaf0e3c63a6cf49f0630d9fa5858ca1306056aaa0a58d255f9f5f14b94db8f`
+- Permanent local artifact directory:
+  `/Users/cgic/Omi-CV1-Reliability-Work/artifacts/build110`
 - Isolated bundle identifier:
   `com.omi.reliability.alexsmacbookpro`
 - Customer plane: production Firebase account universe and

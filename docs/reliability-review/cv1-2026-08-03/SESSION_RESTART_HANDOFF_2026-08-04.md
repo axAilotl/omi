@@ -66,17 +66,20 @@ Its resumable Kimi session ID is
 `KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md`; do not depend on the remote
 report being reachable before reading that summary.
 
+A permanent local copy of the full report and sanitized trace is stored under
+/Users/cgic/Omi-CV1-Reliability-Work/kimi.
+
 ## Local worktrees
 
 ```text
-/private/tmp/omi-cv1-blackbox
+/Users/cgic/Omi-CV1-Reliability-Work/worktrees/cv1-blackbox-diagnostics
   codex/cv1-blackbox-diagnostics
 
-/private/tmp/omi-cv1-end-to-end-pipeline
+/Users/cgic/Omi-CV1-Reliability-Work/worktrees/cv1-storage-first-app
   codex/cv1-end-to-end-pipeline
   remote PR head: fork/codex/cv1-storage-first-app
 
-/private/tmp/omi-ios-build110-qualification
+/Users/cgic/Omi-CV1-Reliability-Work/worktrees/ios-build110-qualification
   codex/ios-build110-qualification
 ```
 
@@ -101,6 +104,14 @@ Composite iOS IPA SHA-256
 
 Never identify a DFU package by its display filename alone. Hash the ZIP,
 manifest, signed application header, and network image before suspending BLE.
+
+The exact tested IPA, DFU ZIP, and signed application image are permanently
+preserved under:
+
+    /Users/cgic/Omi-CV1-Reliability-Work/artifacts/build110
+
+The matching screenshots, trace exports, Kimi report, and root archive index
+are siblings under /Users/cgic/Omi-CV1-Reliability-Work.
 
 ## Physical iOS setup that works
 
