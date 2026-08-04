@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "campaign": "cv1-digital-twin-001",
+  "frozen_source_manifest_sha256": "6c84e31aa19e9ca3a295ef6cd9221a671e0867465df10a3026fd4aade96ecd1d",
+  "default_seed": 108001,
+  "global_invariants": [
+    "no_durable_range_loss",
+    "no_duplicate_range_acceptance",
+    "no_advance_before_phone_durability",
+    "live_lane_preempts_history",
+    "transport_change_does_not_close_conversation",
+    "retry_is_bounded_and_observable"
+  ],
+  "scenarios": [
+    {
+      "id": "ADV_INIT_FAIL_ONCE",
+      "layer": "babblesim-production-firmware",
+      "required": true,
+      "seed": 108101,
+      "faults": [
+        {"at": "first_bt_le_adv_start", "return": "-EIO", "count": 1}
+      ],
+      "assertions": [
+        "advertising_is_observable_without_button_or_power_intervention",
+        "client_connects_once",
+        "retry_attempts_are_bounded",
+        "blackbox_records_initial_failure_and_recovery",
+        "no_periodic_stop_start_supervisor"
+      ],
+      "metrics": ["recovery_ms", "retry_count", "adv_start_calls"],
+      "broken_control": "disable_recovery_owner"
+    },
+    {
+      "id": "ADV_INIT_FAIL_PERSISTENT",
+      "layer": "babblesim-production-firmware",
+      "required": true,
+      "seed": 108102,
+      "faults": [
+        {"at": "bt_le_adv_start", "return": "-EIO", "count": 1000}
+      ],
+      "assertions": [
+        "retry_budget_is_exhausted",
+        "terminal_failure_is_observable",
+        "no_busy_loop",
+        "no_false_connected_or_listening_state"
+      ],
+      "metrics": ["retry_count", "elapsed_ms", "adv_start_calls"],
+      "broken_control": "unbounded_retry_policy"
+    },
+    {
+      "id": "SNAPSHOT_FAIL_SUCCESS_FAIL",
+      "layer": "host-production-policy",
+      "required": true,
+      "seed": 108201,
+      "faults": [
+        {"at": "snapshot_commit", "outcomes": ["failure", "success", "failure"]}
+      ],
+      "assertions": [
+        "initial_failure_is_not_ready",
+        "success_publishes_durable_window",
+        "later_failure_preserves_published_window",
+        "later_failure_schedules_bounded_retry",
+        "disconnect_clears_session_readiness"
+      ],
+      "metrics": ["commit_attempts", "retry_count"],
+      "broken_control": "assign_readiness_from_latest_commit_only"
+    },
+    {
+      "id": "DISCONNECT_DURING_INFO",
+      "layer": "protocol-state-model",
+      "required": true,
+      "seed": 108301,
+      "faults": [{"at": "ring_info_response", "action": "disconnect"}],
+      "assertions": [
+        "no_advance",
+        "source_cursor_unchanged",
+        "reconnect_resumes_without_second_user_sync"
+      ],
+      "metrics": ["resume_ms", "duplicate_records", "advance_calls"],
+      "broken_control": "advance_on_command_dispatch"
+    },
+    {
+      "id": "DISCONNECT_DURING_READ",
+      "layer": "protocol-state-model",
+      "required": true,
+      "seed": 108302,
+      "faults": [{"at": "ring_data_halfway", "action": "disconnect"}],
+      "assertions": [
+        "partial_wal_is_not_registered_complete",
+        "no_advance",
+        "retry_yields_one_complete_exact_range",
+        "no_duplicate_range_acceptance"
+      ],
+      "metrics": ["resume_ms", "bytes_replayed", "advance_calls"],
+      "broken_control": "register_partial_range"
+    },
+    {
+      "id": "DISCONNECT_AFTER_DONE_BEFORE_DURABILITY",
+      "layer": "protocol-state-model",
+      "required": true,
+      "seed": 108303,
+      "faults": [{"at": "after_done_before_wal_fsync", "action": "disconnect"}],
+      "assertions": [
+        "no_advance",
+        "retry_is_idempotent",
+        "payload_hash_matches_source_range"
+      ],
+      "metrics": ["resume_ms", "duplicate_records", "advance_calls"],
+      "broken_control": "advance_on_done"
+    },
+    {
+      "id": "DISCONNECT_DURING_ADVANCE_ACK",
+      "layer": "protocol-state-model",
+      "required": true,
+      "seed": 108304,
+      "faults": [{"at": "advance_ack", "action": "disconnect"}],
+      "assertions": [
+        "phone_retains_durable_range_identity",
+        "repeated_advance_is_idempotent",
+        "backend_accepts_source_range_once"
+      ],
+      "metrics": ["advance_calls", "duplicate_range_acceptances"],
+      "broken_control": "new_identity_on_advance_retry"
+    },
+    {
+      "id": "LIVE_PREEMPTS_MANUAL_HISTORY",
+      "layer": "scheduler-state-model",
+      "required": true,
+      "seed": 108401,
+      "faults": [{"at": "history_slice_midpoint", "action": "new_live_audio"}],
+      "assertions": [
+        "history_requires_explicit_authorization",
+        "live_slice_runs_next",
+        "history_snapshot_does_not_extend",
+        "one_serial_ring_reader"
+      ],
+      "metrics": ["live_wait_ms", "history_kbps", "preemption_count"],
+      "broken_control": "fifo_without_lane_priority"
+    },
+    {
+      "id": "CORRUPT_ZERO_DECODABLE_RECORD",
+      "layer": "host-production-policy",
+      "required": false,
+      "seed": 108501,
+      "faults": [{"at": "record_payload", "action": "crc_valid_but_no_decodable_frame"}],
+      "assertions": [
+        "range_is_quarantined",
+        "no_advance",
+        "no_empty_conversation_or_summary"
+      ],
+      "metrics": ["quarantined_ranges", "advance_calls"],
+      "broken_control": "accept_crc_only"
+    },
+    {
+      "id": "TWO_CONSUMERS_OVERLAPPING_RANGE",
+      "layer": "app-backend-reference-model",
+      "required": false,
+      "seed": 108601,
+      "faults": [{"at": "second_consumer", "action": "replay_same_source_range"}],
+      "assertions": [
+        "one_canonical_source_range",
+        "one_backend_acceptance",
+        "one_logical_conversation_projection"
+      ],
+      "metrics": ["duplicate_range_acceptances", "logical_conversations"],
+      "broken_control": "identity_by_local_filename"
+    }
+  ]
+}
