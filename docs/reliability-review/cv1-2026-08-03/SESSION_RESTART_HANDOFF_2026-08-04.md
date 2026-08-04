@@ -36,6 +36,36 @@ The composite qualification branch is evidence/integration scaffolding, not a
 replacement for the reviewable platform PRs. Do not merge the broad black-box
 stack as one production PR.
 
+### Exact preservation points
+
+```text
+fork/codex/cv1-blackbox-diagnostics
+  d84ae1291f  firmware build-110 recovery diagnostics
+  a31348224e  app physical recovery harness
+  17f4680c4e  CV1 review and restart-handoff packet
+  e25f58556b  qualification evidence
+
+fork/codex/cv1-storage-first-app
+  90927b4562  build-110 physical iOS run evidence
+
+fork/codex/ios-build110-qualification
+  8f0f7e0774  restored-session composite integration
+```
+
+The 2026-08-04 evidence updates are also copied into the existing review
+surfaces:
+
+- firmware PR #10654: issue comment `5184104231`;
+- app PR #10656: issue comment `5184103743`;
+- iOS GATT PR #10573: issue comment `5184103972`.
+
+Kimi's latest raw report remains on the Linux review host at
+`/mnt/ai/omi-cv1-ios-process-recovery-2026-08-04/KIMI_IOS_PROCESS_RECOVERY_REVIEW.md`.
+Its resumable Kimi session ID is
+`session_4e774221-7412-4d44-b866-56fa68d49b1e`. The repository-owned summary is
+`KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md`; do not depend on the remote
+report being reachable before reading that summary.
+
 ## Local worktrees
 
 ```text
