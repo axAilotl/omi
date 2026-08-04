@@ -86,3 +86,32 @@ Identity:
 - Never recover this condition by uninstalling or clearing app data.
 - A backup crash and a subsequent debug-runtime launch crash are separate
   failures; preserve both evidence streams before attribution.
+
+## BLE reclaim follow-up
+
+The first standalone profile process remained alive but the tester did not see
+the pendant in the app. That means crash-free launch alone was not a complete
+recovery gate.
+
+A subsequent controlled profile relaunch with native console evidence showed:
+
+- CoreBluetooth powered on with the Flutter API installed at 17:57:46;
+- exact saved pendant 425529A3-6F68-F264-C0CA-DAC438DA1240 connected at
+  17:57:47;
+- battery, audio, diagnostic, and transfer notification subscriptions enabled
+  by 17:57:51;
+- exported firmware 3.0.30, battery 71%, and no mobile BLE error;
+- firmware counters with 385,510 audio frames, zero dropped frames, zero sync
+  errors, and 152,926,476 historical sync bytes;
+- 87,155,868 ring bytes and 196,297 unread packets still available.
+
+The live profile process remained PID 5946 after detaching the local console.
+The exported evidence is permanently stored at:
+
+    /Users/cgic/Omi-CV1-Reliability-Work/evidence/build110-ios/omi-blackbox-profile-reconnect-20260804.json
+
+Disposition: the pendant is reclaimed now, but the first profile launch's
+missed UI/device state remains an intermittent cold-start bootstrap finding.
+Future qualification must require native didConnect, all required
+subscriptions, Dart/UI connected state, and live audio—not merely a surviving
+process.
