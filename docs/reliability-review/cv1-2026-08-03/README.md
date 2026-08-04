@@ -74,6 +74,9 @@ flashed or physically qualified.
 - [KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md](KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md)
   — independent process-death ownership analysis and the recommended app/backend
   split.
+- [IOS_DEBUG_RELAUNCH_INCIDENT_2026-08-04.md](IOS_DEBUG_RELAUNCH_INCIDENT_2026-08-04.md)
+  — detached-debug launch crash classification, no-data-loss recovery, and the
+  permanent profile-build rule for unattended drains.
 
 - [ARCHITECTURE_AND_INVARIANTS.md](ARCHITECTURE_AND_INVARIANTS.md) — intended
   end-to-end ownership and non-negotiable behavior.

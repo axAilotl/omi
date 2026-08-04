@@ -80,6 +80,15 @@ Debug and profile use the same bundle identifier, signing identity, profile,
 Firebase project, and customer API. Installation is always an in-place update;
 do not uninstall the app to change build modes.
 
+Debug is only for an actively attached flutter run/Marionette session. Do not
+hand a detached debug build to a tester for unattended backup or dogfooding:
+after a real process death, a physical iPhone may crash that JIT artifact
+during GeneratedPluginRegistrant before Dart starts. Before detaching for
+unattended use, rebuild with the helper's default profile mode, install it in
+place under the same bundle identifier, then prove one terminate/relaunch
+cycle. This preserves auth and recordings while producing a standalone AOT
+app.
+
 The resulting app must have all of these properties before installation:
 
 ```text

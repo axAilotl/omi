@@ -5,7 +5,9 @@ Authoritative as of 2026-08-04 after the build-110 physical iPhone pass.
 This file is the minimum context a fresh engineering session must read before
 changing or retesting the CV1 reliability stack. Read it together with
 `BUILD110_IOS_FINAL_QUALIFICATION.md` and
-`KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md`.
+`KIMI_IOS_PROCESS_RECOVERY_SUMMARY_2026-08-04.md`. For any physical iOS
+restart or unattended drain, also read
+`IOS_DEBUG_RELAUNCH_INCIDENT_2026-08-04.md`.
 
 ## Product contract
 
@@ -140,6 +142,10 @@ and the all-app postflight proved only Omi Dev remained.
 
 - `q` in `flutter run` terminates the application; `d` detaches and leaves it
   running.
+- A detached debug/JIT app may continue running, but it is not a standalone
+  dogfood artifact. After a real process death it can crash during generated
+  plugin registration when launched from SpringBoard. Install the in-place
+  profile/AOT build before unattended drain or background testing.
 - Do not send a raw `devicectl` SIGKILL while the Flutter debugger is attached;
   the debugger can intercept it and leave the UI apparently frozen. Quit or
   detach first.
