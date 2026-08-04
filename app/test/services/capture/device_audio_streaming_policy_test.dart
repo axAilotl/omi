@@ -43,5 +43,29 @@ void main() {
         isTrue,
       );
     });
+
+    test('initial storage-tail failure is converted into a recoverable restart signal', () async {
+      Object? capturedError;
+
+      final result = await DeviceAudioStreamingPolicy.startStorageTailRecoverably<int>(
+        start: () async => throw StateError('SD remount still pending'),
+        onFailure: (error, _) => capturedError = error,
+      );
+
+      expect(result, isNull);
+      expect(capturedError, isA<StateError>());
+    });
+
+    test('successful storage-tail start is returned without scheduling recovery', () async {
+      var failed = false;
+
+      final result = await DeviceAudioStreamingPolicy.startStorageTailRecoverably<int>(
+        start: () async => 42,
+        onFailure: (_, __) => failed = true,
+      );
+
+      expect(result, 42);
+      expect(failed, isFalse);
+    });
   });
 }

@@ -47,6 +47,8 @@ void main() {
     expect(snapshot.charging, isTrue);
     expect(snapshot.counters['audio_queue_full'], 1007);
     expect(snapshot.counters['diagnostic_busy'], 1038);
+    expect(snapshot.counters['sync_snapshot_prefix_served'], 1040);
+    expect(snapshot.counters['sync_snapshot_commit_failure'], 1041);
   });
 
   test('snapshot counter pages preserve their offset for MTU-safe merging', () {
@@ -99,6 +101,42 @@ void main() {
     expect(page.events.first.name, 'audio_notify_error');
     expect(page.events.first.arg0, -12);
     expect(page.events.last.name, 'sync_done');
+  });
+
+  test('trace parser names microphone recovery evidence', () {
+    final bytes = ByteData(40);
+    bytes.setUint8(0, BlackboxProtocol.responseTrace);
+    bytes.setUint8(1, BlackboxProtocol.protocolVersion);
+    bytes.setUint8(2, 1);
+    bytes.setUint32(20, 12, Endian.little);
+    bytes.setUint32(24, 900, Endian.little);
+    bytes.setUint16(28, 30, Endian.little);
+    bytes.setInt32(32, 0, Endian.little);
+    bytes.setInt32(36, 6400, Endian.little);
+
+    final page = BlackboxProtocol.parseTracePage(bytes.buffer.asUint8List());
+    expect(page, isNotNull);
+    expect(page!.events.single.name, 'mic_recovery');
+    expect(page.events.single.arg0, 0);
+    expect(page.events.single.arg1, 6400);
+  });
+
+  test('trace parser names advertising recovery evidence', () {
+    final bytes = ByteData(40);
+    bytes.setUint8(0, BlackboxProtocol.responseTrace);
+    bytes.setUint8(1, BlackboxProtocol.protocolVersion);
+    bytes.setUint8(2, 1);
+    bytes.setUint32(20, 13, Endian.little);
+    bytes.setUint32(24, 1200, Endian.little);
+    bytes.setUint16(28, 31, Endian.little);
+    bytes.setInt32(32, 0, Endian.little);
+    bytes.setInt32(36, -12, Endian.little);
+
+    final page = BlackboxProtocol.parseTracePage(bytes.buffer.asUint8List());
+    expect(page, isNotNull);
+    expect(page!.events.single.name, 'ble_advertising_recovery');
+    expect(page.events.single.arg0, 0);
+    expect(page.events.single.arg1, -12);
   });
 
   test('truncated payloads fail closed', () {

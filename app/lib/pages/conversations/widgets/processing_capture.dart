@@ -339,6 +339,7 @@ class _ConversationCaptureWidgetState extends State<ConversationCaptureWidget> {
   Widget _buildUnifiedRecordingUI(CaptureProvider provider, Widget? header) {
     bool isDeviceRecording = provider.havingRecordingDevice &&
         (provider.recordingState == RecordingState.deviceRecord || provider.recordingState == RecordingState.pause);
+    final isDeviceAudioRecovering = isDeviceRecording && !provider.isPaused && !provider.hasActiveDeviceAudioStream;
 
     // Offline/batch mode: device or phone-mic audio is saved locally with no live
     // transcription, so show a dedicated, self-explanatory card instead of the
@@ -375,13 +376,15 @@ class _ConversationCaptureWidgetState extends State<ConversationCaptureWidget> {
         ? context.l10n.paused
         : isPaused
             ? (isDeviceRecording ? context.l10n.muted : context.l10n.paused)
-            : transcriptionFailure != null
-                ? transcriptionFailure.retryable == true
-                    ? context.l10n.transcriptionReconnecting
-                    : context.l10n.transcriptionUnavailable
-                : hasPhotos
-                    ? 'Capturing'
-                    : context.l10n.listening;
+            : isDeviceAudioRecovering
+                ? context.l10n.transcriptionReconnecting
+                : transcriptionFailure != null
+                    ? transcriptionFailure.retryable == true
+                        ? context.l10n.transcriptionReconnecting
+                        : context.l10n.transcriptionUnavailable
+                    : hasPhotos
+                        ? 'Capturing'
+                        : context.l10n.listening;
 
     // When recording is active, show the unified UI design
     if (isDeviceRecording || isPhoneRecording) {

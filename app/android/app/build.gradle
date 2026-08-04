@@ -47,6 +47,10 @@ kotlin {
 
 android {
 
+    def isBlackboxPackage = providers.gradleProperty("omiBlackboxPackage")
+        .map { it.toBoolean() }
+        .getOrElse(false)
+
     buildFeatures {
         buildConfig = true
     }
@@ -65,8 +69,8 @@ android {
         }
         dev {
             dimension "flavor-type"
-            applicationId "com.friend.ios.dev.blackbox"
-            resValue "string", "app_name", "Omi Blackbox"
+            applicationId isBlackboxPackage ? "com.friend.ios.dev.blackbox" : "com.friend.ios.dev"
+            resValue "string", "app_name", isBlackboxPackage ? "Omi Blackbox" : "Omi Dev"
         }
     }
 

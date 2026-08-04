@@ -382,8 +382,14 @@ class RingInfoUnavailableException extends RingStorageException {
 /// (or a missing response), and always stop after [maxAttempts].
 class RingInfoRetryPolicy {
   const RingInfoRetryPolicy({
-    this.maxAttempts = 3,
-    this.backoff = const [Duration(milliseconds: 500), Duration(seconds: 1)],
+    this.maxAttempts = 6,
+    this.backoff = const [
+      Duration(milliseconds: 500),
+      Duration(seconds: 1),
+      Duration(seconds: 2),
+      Duration(seconds: 4),
+      Duration(seconds: 8),
+    ],
   }) : assert(maxAttempts > 0);
 
   final int maxAttempts;

@@ -1,19 +1,27 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
 import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
 
+import 'package:omi/backend/schema/bt_device/bt_device.dart';
 import 'package:omi/pages/home/firmware_mixin.dart';
 import 'package:omi/providers/device_provider.dart';
+import 'package:omi/services/services.dart';
+import 'package:omi/utils/blackbox_firmware_artifact.dart';
 
 const bool blackboxDfuHarnessEnabled = bool.fromEnvironment('OMI_BLACKBOX_HARNESS');
-const String blackboxDfuArtifactName = 'omi-cv1-3.0.30-blackbox.zip';
+const String blackboxDfuArtifactName = currentBlackboxFirmwareArtifactName;
 
 class BlackboxDfuHarnessPolicy {
   static bool matches(Uri uri, {required bool enabled}) {
     return enabled && uri.scheme == 'omi' && uri.host == 'blackbox' && uri.path == '/dfu';
+  }
+
+  static bool canStart(BtDevice? device, {required bool hasGattConnection}) {
+    return hasGattConnection && device != null && device.type == DeviceType.omi;
   }
 }
 
@@ -53,21 +61,38 @@ class _BlackboxDfuHarnessPageState extends State<BlackboxDfuHarnessPage> with Fi
     _started = true;
 
     try {
+      final documents = await getApplicationDocumentsDirectory();
+      final artifactPath = '${documents.path}/$blackboxDfuArtifactName';
+      final artifactFile = File(artifactPath);
+      if (!await artifactFile.exists()) {
+        throw StateError('Verified build-110 artifact not found: $blackboxDfuArtifactName');
+      }
+      final verification = BlackboxFirmwareArtifactVerifier.verify(
+        fileName: blackboxDfuArtifactName,
+        zipBytes: await artifactFile.readAsBytes(),
+      );
+      if (!mounted) return;
+      setState(() => _status = 'Verified ${verification.summary}; waiting for the paired CV1');
+
       final provider = context.read<DeviceProvider>();
+      BtDevice? device;
+      var hasGattConnection = false;
       for (var attempt = 0; attempt < 60 && mounted; attempt++) {
-        if (provider.isConnected && provider.connectedDevice != null) break;
+        device = provider.connectedDevice ?? provider.pairedDevice;
+        if (device != null && device.type == DeviceType.omi) {
+          hasGattConnection = await ServiceManager.instance().device.ensureConnection(device.id) != null;
+          if (BlackboxDfuHarnessPolicy.canStart(device, hasGattConnection: hasGattConnection)) break;
+        }
         await Future<void>.delayed(const Duration(milliseconds: 500));
       }
       if (!mounted) return;
-      final device = provider.connectedDevice;
-      if (!provider.isConnected || device == null || device.type.name != 'omi') {
+      if (!BlackboxDfuHarnessPolicy.canStart(device, hasGattConnection: hasGattConnection)) {
         throw StateError('The exact paired Omi CV1 did not connect within 30 seconds');
       }
+      final targetDevice = device!;
 
-      final documents = await getApplicationDocumentsDirectory();
-      final artifactPath = '${documents.path}/$blackboxDfuArtifactName';
-      setState(() => _status = 'Flashing $blackboxDfuArtifactName to ${device.name}');
-      await startMCUDfu(device, zipFilePath: artifactPath);
+      setState(() => _status = 'Flashing verified ${verification.summary} to ${targetDevice.name}');
+      await startMCUDfu(targetDevice, zipFilePath: artifactPath);
     } catch (error) {
       if (mounted) {
         setState(() {

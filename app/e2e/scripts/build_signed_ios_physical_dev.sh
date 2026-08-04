@@ -5,7 +5,8 @@ APP_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 DEVICE_BUNDLE_ID="com.omi.reliability.alexsmacbookpro"
 TEAM_ID="6DV84DW2BA"
 SIGNING_IDENTITY="Apple Development: Raul Vega (MS392Y9HC6)"
-PROFILE_SOURCE="${OMI_IOS_PROFILE_SOURCE:-/private/tmp/omi-ios-storage-first-known-good-auth-20260729.o1Z4dQ/OmiDev-storage-first.app/embedded.mobileprovision}"
+PROFILE_SOURCE="${OMI_IOS_PROFILE_SOURCE:-${HOME}/Downloads/omi-ios-personal-8c1321a908-20260725/OmiDev-personal-profile-signed.app/embedded.mobileprovision}"
+BUILD_MODE="${OMI_IOS_BUILD_MODE:-profile}"
 
 fail() {
   echo "signed-ios-dev build: $*" >&2
@@ -14,6 +15,8 @@ fail() {
 
 [[ -f "$PROFILE_SOURCE" ]] || fail "missing provisioning profile source: $PROFILE_SOURCE"
 security find-identity -v -p codesigning | grep -Fq "$SIGNING_IDENTITY" || fail "missing signing identity: $SIGNING_IDENTITY"
+[[ "$BUILD_MODE" == "debug" || "$BUILD_MODE" == "profile" ]] ||
+  fail "OMI_IOS_BUILD_MODE must be debug or profile, got: $BUILD_MODE"
 
 "${APP_DIR}/e2e/scripts/bootstrap_physical_dev_config.sh"
 
@@ -30,7 +33,7 @@ restore_pod_lock() {
 trap restore_pod_lock EXIT
 
 cd "$APP_DIR"
-flutter build ios --profile --no-codesign --flavor dev -t lib/main.dart --dart-define OMI_BLACKBOX_HARNESS=true
+flutter build ios "--${BUILD_MODE}" --no-codesign --flavor dev -t lib/main.dart --dart-define OMI_BLACKBOX_HARNESS=true
 
 UNSIGNED_APP="${APP_DIR}/build/ios/iphoneos/Runner.app"
 [[ -d "$UNSIGNED_APP" ]] || fail "Flutter did not produce $UNSIGNED_APP"

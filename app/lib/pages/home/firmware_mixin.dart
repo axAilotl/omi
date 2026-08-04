@@ -209,7 +209,7 @@ mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
     _activeDfuHandoff = handoff;
 
     try {
-      await deviceProvider.prepareDFU();
+      await deviceProvider.prepareDFUForDevice(btDevice.id);
       await Future.delayed(const Duration(seconds: 2));
 
       await killMcuUpdateManager();
@@ -278,7 +278,7 @@ mixin FirmwareMixin<T extends StatefulWidget> on State<T> {
     _activeDfuHandoff = handoff;
 
     try {
-      await deviceProvider.prepareDFU();
+      await deviceProvider.prepareDFUForDevice(btDevice.id);
       await Future.delayed(const Duration(seconds: 2));
       final dfu = NordicDfu();
       await dfu.startDfu(

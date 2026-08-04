@@ -372,7 +372,7 @@ class OmiBleForegroundService : Service() {
         }
 
         managedDevices[addr] = ManagedDevice(address = addr, requiresBond = requiresBond)
-        connectToDevice(addr, "manageDevice")
+        connectToDevice(addr, "manageDevice", BleGattConnectionMode.DIRECT)
     }
 
     fun unmanageDevice(address: String) {
@@ -402,7 +402,11 @@ class OmiBleForegroundService : Service() {
 
     // ── Connection ──
 
-    private fun connectToDevice(address: String, source: String) {
+    private fun connectToDevice(
+        address: String,
+        source: String,
+        mode: BleGattConnectionMode = BleGattConnectionMode.PASSIVE,
+    ) {
         synchronized(syncLock) {
             val addr = address.uppercase()
             val managed = managedDevices[addr] ?: return
@@ -410,13 +414,9 @@ class OmiBleForegroundService : Service() {
 
             if (bleManager.connectedGatts.containsKey(addr)) bleManager.closeGatt(addr)
 
-            // autoConnect=false for initial connection (device nearby, fast).
-            // autoConnect=true for retries/reconnection (passive scan, survives BT toggle).
-            val autoConnect = source != "manageDevice"
-
-            Log.i(TAG, "connectToDevice($source): $addr (autoConnect=$autoConnect)")
+            Log.i(TAG, "connectToDevice($source): $addr (autoConnect=${mode.autoConnect})")
             val gatt = try {
-                bleManager.connectGatt(addr, autoConnect = autoConnect)
+                bleManager.connectGatt(addr, autoConnect = mode.autoConnect)
             } catch (e: SecurityException) {
                 Log.e(TAG, "connectToDevice($source): BLUETOOTH_CONNECT permission denied for $addr")
                 bleManager.mainHandler.post {
@@ -443,7 +443,7 @@ class OmiBleForegroundService : Service() {
         managed.pendingReconnect?.let { handler.removeCallbacks(it) }
         managed.pendingReconnect = null
         managed.reconnectState.resetForExplicitRequest()
-        connectToDevice(addr, source)
+        connectToDevice(addr, source, BleGattConnectionMode.DIRECT)
     }
 
     /**
@@ -474,7 +474,7 @@ class OmiBleForegroundService : Service() {
                 managed.currentGattHash = null
             }
         }
-        connectToDevice(addr, source)
+        connectToDevice(addr, source, BleGattConnectionMode.DIRECT)
     }
 
     // ── Disconnect handling + retry ──

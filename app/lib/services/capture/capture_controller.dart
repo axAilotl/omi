@@ -1039,12 +1039,23 @@ class CaptureController extends ChangeNotifier
           },
         );
       }
-      final session = await syncs.startStorageAuthoritativeAudioTail(
-        onLiveFrames: (List<List<int>> frames) {
-          _storageAudioTailRestartAttempt = 0;
-          return _liveAudioFramePacer?.enqueue(frames) ?? LiveAudioFrameDelivery.rejected();
+      final session = await DeviceAudioStreamingPolicy.startStorageTailRecoverably<RingAudioTailSession>(
+        start: () => syncs.startStorageAuthoritativeAudioTail(
+          onLiveFrames: (List<List<int>> frames) {
+            _storageAudioTailRestartAttempt = 0;
+            return _liveAudioFramePacer?.enqueue(frames) ?? LiveAudioFrameDelivery.rejected();
+          },
+          resumeLiveContinuity: resumeLiveContinuity,
+        ),
+        onFailure: (error, stackTrace) {
+          unawaited(SharedPreferencesUtil().saveBool('nativeBleForegroundReady', false));
+          Logger.handle(
+            error,
+            stackTrace,
+            message: 'Storage-authoritative audio tail failed to start; scheduling recovery',
+          );
+          _scheduleStorageAudioTailRestart(deviceId);
         },
-        resumeLiveContinuity: resumeLiveContinuity,
       );
       _ringAudioTailSession = session;
       if (session != null) {
