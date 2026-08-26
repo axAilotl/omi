@@ -1,0 +1,50 @@
+/* Recovery overrides for factory DK2 hardware. */
+
+&gpio0 {
+	dk2_recovery_speaker_park: dk2-recovery-speaker-park {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "dk2-speaker-amp-off";
+	};
+};
+
+&gpio1 {
+	dk2_recovery_haptic_park: dk2-recovery-haptic-park {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "dk2-haptic-off";
+	};
+};
+
+&sdhc0 {
+	/* The installed card is reliable at 4 MHz and fails at 24 MHz. */
+	spi-max-frequency = <4000000>;
+};
+
+&qspi {
+	status = "disabled";
+};
+
+&sd_partition {
+	read-only;
+};
+
+&code_partition {
+	reg = <0x00027000 0x000c3000>;
+};
+
+&flash0 {
+	partitions {
+		guard_partition: partition@ea000 {
+			label = "adafruit_guard";
+			reg = <0x000ea000 0x00002000>;
+			read-only;
+		};
+	};
+};
+
+&boot_partition {
+	read-only;
+};
