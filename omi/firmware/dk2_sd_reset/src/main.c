@@ -20,6 +20,8 @@
 static const char marker[] = "CISSA-SD-RESERVATION-V1\n";
 #define MARKER_SIZE (sizeof(marker) - 1U)
 
+static bool recovered_mkfs_eio;
+
 static const struct gpio_dt_spec red_led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct gpio_dt_spec green_led = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
 static const struct gpio_dt_spec blue_led = GPIO_DT_SPEC_GET(DT_ALIAS(led2), gpios);
@@ -123,7 +125,7 @@ static int provision_card(const char **failed_stage)
 	}
 	*failed_stage = "raw_sync";
 	rc = disk_access_ioctl(DISK_NAME, DISK_IOCTL_CTRL_SYNC, NULL);
-	if (rc != 0 && rc != -ENOTSUP) {
+	if (rc != 0) {
 		return rc;
 	}
 	*failed_stage = "raw_read";
@@ -138,6 +140,16 @@ static int provision_card(const char **failed_stage)
 
 	*failed_stage = "mkfs";
 	rc = fs_mkfs(FS_FATFS, (uintptr_t)DISK_NAME, &fat32_cfg, 0);
+	if (rc == -EIO) {
+		/* This card can finish every format write yet exceed the SD ready
+		 * timeout on FatFs' final CTRL_SYNC. Do not accept that status by
+		 * itself: wait for the card, require a successful raw sync, then let
+		 * mount plus exact marker readback prove whether the format exists. */
+		recovered_mkfs_eio = true;
+		k_sleep(K_SECONDS(1));
+		*failed_stage = "mkfs_recovery_sync";
+		rc = disk_access_ioctl(DISK_NAME, DISK_IOCTL_CTRL_SYNC, NULL);
+	}
 	if (rc != 0) {
 		return rc;
 	}
@@ -234,8 +246,9 @@ int main(void)
 
 	wait_for_console();
 	if (rc == 0) {
-		printk("PROVISION_OK marker=%s bytes=%u verified=1\r\n",
-		       MARKER_PATH, (unsigned int)MARKER_SIZE);
+		printk("PROVISION_OK marker=%s bytes=%u verified=1 mkfs_eio_recovered=%u\r\n",
+		       MARKER_PATH, (unsigned int)MARKER_SIZE,
+		       recovered_mkfs_eio ? 1U : 0U);
 	} else {
 		printk("PROVISION_FAIL stage=%s errno=%d\r\n", failed_stage, rc);
 	}
