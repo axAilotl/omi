@@ -19,8 +19,13 @@
 
 static const char marker[] = "CISSA-SD-RESERVATION-V1\n";
 #define MARKER_SIZE (sizeof(marker) - 1U)
+#define MKFS_WORK_SIZE 4096U
 
-static bool recovered_mkfs_eio;
+static uint8_t mkfs_work[MKFS_WORK_SIZE] __aligned(4);
+static uint32_t card_sector_count;
+static FRESULT mkfs_result = FR_OK;
+static unsigned int mkfs_attempts;
+static bool recovered_mkfs_error;
 
 static const struct gpio_dt_spec red_led = GPIO_DT_SPEC_GET(DT_ALIAS(led0), gpios);
 static const struct gpio_dt_spec green_led = GPIO_DT_SPEC_GET(DT_ALIAS(led1), gpios);
@@ -73,6 +78,22 @@ static void wait_for_console(void)
 	}
 }
 
+static int mkfs_errno(FRESULT result)
+{
+	switch (result) {
+	case FR_OK:
+		return 0;
+	case FR_WRITE_PROTECTED:
+		return -EROFS;
+	case FR_NOT_ENOUGH_CORE:
+		return -ENOMEM;
+	case FR_INVALID_PARAMETER:
+		return -EINVAL;
+	default:
+		return -EIO;
+	}
+}
+
 static int provision_card(const char **failed_stage)
 {
 	static MKFS_PARM fat32_cfg = {
@@ -116,6 +137,12 @@ static int provision_card(const char **failed_stage)
 	if (sector_size != sizeof(blank_sector)) {
 		return -ENOTSUP;
 	}
+	*failed_stage = "sector_count";
+	rc = disk_access_ioctl(DISK_NAME, DISK_IOCTL_GET_SECTOR_COUNT,
+			       &card_sector_count);
+	if (rc != 0 || card_sector_count < 128U) {
+		return rc != 0 ? rc : -ENOSPC;
+	}
 
 	/* Destroy and verify sector zero before asking FatFs to format. */
 	*failed_stage = "raw_write";
@@ -138,20 +165,34 @@ static int provision_card(const char **failed_stage)
 		return -EIO;
 	}
 
+	/* Zephyr's fs_mkfs wrapper gives FatFs one 512-byte work sector, forcing
+	 * thousands of individual SPI writes on a large card. Use an aligned
+	 * eight-sector buffer so FatFs emits bounded multi-block transfers. */
 	*failed_stage = "mkfs";
-	rc = fs_mkfs(FS_FATFS, (uintptr_t)DISK_NAME, &fat32_cfg, 0);
-	if (rc == -EIO) {
-		/* This card can finish every format write yet exceed the SD ready
-		 * timeout on FatFs' final CTRL_SYNC. Do not accept that status by
-		 * itself: wait for the card, require a successful raw sync, then let
-		 * mount plus exact marker readback prove whether the format exists. */
-		recovered_mkfs_eio = true;
+	for (mkfs_attempts = 1U; mkfs_attempts <= 3U; ++mkfs_attempts) {
+		mkfs_result = f_mkfs(DISK_NAME ":", &fat32_cfg, mkfs_work,
+				     sizeof(mkfs_work));
+		if (mkfs_result == FR_OK) {
+			break;
+		}
+		if (mkfs_result != FR_DISK_ERR) {
+			return mkfs_errno(mkfs_result);
+		}
 		k_sleep(K_SECONDS(1));
-		*failed_stage = "mkfs_recovery_sync";
+		*failed_stage = "mkfs_retry_sync";
 		rc = disk_access_ioctl(DISK_NAME, DISK_IOCTL_CTRL_SYNC, NULL);
+		if (rc != 0) {
+			return rc;
+		}
+		*failed_stage = "mkfs";
 	}
-	if (rc != 0) {
-		return rc;
+	if (mkfs_attempts > 3U) {
+		mkfs_attempts = 3U;
+	}
+	if (mkfs_result != FR_OK) {
+		/* A final sync error is provisional. Mount, marker readback, and
+		 * unmount below remain mandatory before success can be reported. */
+		recovered_mkfs_error = true;
 	}
 
 	*failed_stage = "mount";
@@ -246,11 +287,16 @@ int main(void)
 
 	wait_for_console();
 	if (rc == 0) {
-		printk("PROVISION_OK marker=%s bytes=%u verified=1 mkfs_eio_recovered=%u\r\n",
+		printk("PROVISION_OK marker=%s bytes=%u verified=1 sectors=%u "
+		       "mkfs_result=%d attempts=%u recovered=%u\r\n",
 		       MARKER_PATH, (unsigned int)MARKER_SIZE,
-		       recovered_mkfs_eio ? 1U : 0U);
+		       card_sector_count, (int)mkfs_result, mkfs_attempts,
+		       recovered_mkfs_error ? 1U : 0U);
 	} else {
-		printk("PROVISION_FAIL stage=%s errno=%d\r\n", failed_stage, rc);
+		printk("PROVISION_FAIL stage=%s errno=%d sectors=%u "
+		       "mkfs_result=%d attempts=%u\r\n",
+		       failed_stage, rc, card_sector_count, (int)mkfs_result,
+		       mkfs_attempts);
 	}
 
 	for (;;) {

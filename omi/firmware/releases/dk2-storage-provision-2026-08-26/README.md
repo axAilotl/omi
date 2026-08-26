@@ -8,14 +8,16 @@ creates `/CISSA/RESERVED.V1` containing exactly the 24 bytes
 `CISSA-SD-RESERVATION-V1\n`, reads the marker back, unmounts the filesystem,
 and stops.
 
-The tested card completed the FAT32 writes but exceeded the SD ready timeout
-on FatFs' final format sync. The provisioner treats that `-EIO` as provisional
-only: after a delay it requires a successful raw sync, successful mount, exact
-marker readback, and clean unmount before showing green.
+The provisioner gives FatFs an aligned 4096-byte work buffer so formatting uses
+bounded multi-block transfers instead of thousands of individual 512-byte SPI
+transactions. It retries only a FatFs disk error, with a successful raw sync
+required between attempts. A final format error remains provisional: successful
+mount, exact marker readback, and clean unmount are still mandatory before the
+image shows green.
 
 - Source: `omi/firmware/dk2_sd_reset/`
-- UF2 SHA-256: `f6cfa26ef5531436f6e900dfbab8eabb8773efa13e483f41b108165f6ed4e389`
-- Flash range: `[0x27000, 0x37b00)`; Adafruit bootloader and guard region untouched
+- UF2 SHA-256: `f0e401aef3bfe0dfdab0c5fe916ef519cdbfa81ad4f956100ee1ea50c619fb06`
+- Flash range: `[0x27000, 0x37c00)`; Adafruit bootloader and guard region untouched
 - microSD: P0.19 power enable, SPI2 on P1.13/P1.15/P1.14, P0.2 chip select,
   4 MHz maximum clock
 - Safety gates: haptic P1.11 and speaker amplifier P0.4 held low by GPIO hogs
