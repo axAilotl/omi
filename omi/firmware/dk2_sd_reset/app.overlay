@@ -1,0 +1,109 @@
+/*
+ * Destructive DK2 SD reservation-provisioner wiring.
+ *
+ * Safety-critical outputs are parked by GPIO hogs so they are low before
+ * main() runs.  Do not remove these while this image is used on DK2 hardware.
+ */
+
+/ {
+	chosen {
+		zephyr,console = &usb_cdc_acm_uart;
+		zephyr,shell-uart = &usb_cdc_acm_uart;
+	};
+};
+
+&gpio0 {
+	dk2_speaker_amp_park: dk2-speaker-amp-park {
+		gpio-hog;
+		gpios = <4 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "dk2-speaker-amp-off";
+	};
+
+	dk2_sd_power_enable: dk2-sd-power-enable {
+		gpio-hog;
+		gpios = <19 GPIO_ACTIVE_HIGH>;
+		output-high;
+		line-name = "dk2-sd-power-on";
+	};
+};
+
+&gpio1 {
+	dk2_haptic_park: dk2-haptic-park {
+		gpio-hog;
+		gpios = <11 GPIO_ACTIVE_HIGH>;
+		output-low;
+		line-name = "dk2-haptic-off";
+	};
+};
+
+&uart0 {
+	status = "disabled";
+};
+
+&qspi {
+	status = "disabled";
+};
+
+&spi2 {
+	compatible = "nordic,nrf-spi";
+	status = "okay";
+	pinctrl-0 = <&dk2_spi2_default>;
+	pinctrl-1 = <&dk2_spi2_sleep>;
+	pinctrl-names = "default", "sleep";
+	cs-gpios = <&gpio0 2 GPIO_ACTIVE_LOW>;
+
+	dk2_sd: sdhc@0 {
+		compatible = "zephyr,sdhc-spi-slot";
+		reg = <0>;
+		status = "okay";
+		/* Provisioning favors signal margin over throughput. */
+		spi-max-frequency = <4000000>;
+
+		mmc {
+			compatible = "zephyr,sdmmc-disk";
+			status = "okay";
+		};
+	};
+};
+
+&pinctrl {
+	dk2_spi2_default: dk2-spi2-default {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 1, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 15)>,
+				<NRF_PSEL(SPIM_MISO, 1, 14)>;
+		};
+	};
+
+	dk2_spi2_sleep: dk2-spi2-sleep {
+		group1 {
+			psels = <NRF_PSEL(SPIM_SCK, 1, 13)>,
+				<NRF_PSEL(SPIM_MOSI, 1, 15)>,
+				<NRF_PSEL(SPIM_MISO, 1, 14)>;
+			low-power-enable;
+		};
+	};
+};
+
+&sd_partition {
+	read-only;
+};
+
+&code_partition {
+	reg = <0x00027000 0x000c3000>;
+};
+
+&flash0 {
+	partitions {
+		guard_partition: partition@ea000 {
+			label = "adafruit_guard";
+			reg = <0x000ea000 0x00002000>;
+			read-only;
+		};
+	};
+};
+
+&boot_partition {
+	read-only;
+};
