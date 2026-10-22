@@ -7,7 +7,7 @@
     "test": "jest --testTimeout 10000"
   },
   "engines": {
-    "node": ">=v18",
+    "node": "^22.23.4",
     "npm": ">=5.6.0"
   },
   "dependencies": {
