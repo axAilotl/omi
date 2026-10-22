@@ -45,5 +45,8 @@
     "@babel/core": "^7.26.0",
     "fast-uri": "~3.1.4"
   },
-  "name": "omi-memory-ingestion-pipeline"
+  "name": "omi-memory-ingestion-pipeline",
+  "engines": {
+    "node": "^22.23.4"
+  }
 }

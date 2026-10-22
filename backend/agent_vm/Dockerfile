@@ -1,7 +1,7 @@
 ARG PYTHON_BASE_IMAGE=gcr.io/based-hardware-dev/python:3.11-slim-forky
 ARG UV_VERSION=0.11.13
 
-FROM oven/bun:1.2.4 AS bun
+FROM oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d AS bun
 
 FROM ${PYTHON_BASE_IMAGE} AS builder
 

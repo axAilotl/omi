@@ -17,7 +17,7 @@ jobs:
       - name: Setup Node.js 20
         uses: actions/setup-node@v7
         with:
-          node-version: '20'
+          node-version: '22.23.4'
 
       - name: Extract Repository and Username
         id: extract-repo-info
